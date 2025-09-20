@@ -1,0 +1,233 @@
+//////////////////////////////////////////////////////////
+// ENUM
+//////////////////////////////////////////////////////////
+
+Enum Role {
+  USER
+  ADMIN 
+}
+
+Enum FileType {
+  jpg
+  png
+  pdf
+  url
+}
+
+Enum EventGroup {
+  ORGANIZER
+  PRESENTER
+  GUEST
+  COMMITTEE
+}
+
+//////////////////////////////////////////////////////////
+// AUTH
+//////////////////////////////////////////////////////////
+
+Table User {
+  id text [pk, note: "Primary Key ของ User"]
+  email text [unique, note: "อีเมลผู้ใช้ ใช้สำหรับ login"]
+  username varchar [unique, note: "ชื่อผู้ใช้แบบ unique"]
+  name varchar [note: "ชื่อเต็มของผู้ใช้"]
+  image text [note: "ลิงก์โปรไฟล์รูปภาพ"]
+  description varchar [note: "คำอธิบาย/แนะนำตัว"]
+  role Role [default: "USER", note: "สิทธิ์การใช้งาน (USER/ADMIN)"]
+  createdAt timestamp [note: "เวลาที่สร้าง User"]
+  updatedAt timestamp [note: "เวลาที่อัพเดตข้อมูลล่าสุด"]
+
+  Note: "เก็บข้อมูลผู้ใช้งานระบบ"
+}
+
+Table Account {
+  id text [pk, note: "Primary Key ของ Account"]
+  userId text [ref: > User.id, note: "เชื่อมโยงกับ User"]
+  type text [note: "ประเภทบัญชี เช่น oauth"]
+  provider text [note: "ผู้ให้บริการ เช่น Google, Discord"]
+  providerAccountId text [note: "ID ของบัญชีจาก provider"]
+  refresh_token text [note: "Token สำหรับ refresh"]
+  access_token text [note: "Token สำหรับเข้าใช้งาน"]
+  expires_at int [note: "เวลาหมดอายุ token (epoch)"]
+  token_type text [note: "ชนิดของ token เช่น Bearer"]
+  scope text [note: "ขอบเขตสิทธิ์ของ token"]
+  id_token text [note: "ID token"]
+  session_state text [note: "สถานะ session ของ provider"]
+
+  Note: "ข้อมูลบัญชีที่เชื่อมกับ Provider ภายนอก"
+}
+
+Table Session {
+  id text [pk, note: "Primary Key ของ Session"]
+  sessionToken text [unique, note: "Token ของ session"]
+  userId text [ref: > User.id, note: "เชื่อมโยงกับ User"]
+  expires timestamp [note: "เวลาหมดอายุ session"]
+
+  Note: "เก็บ Session ที่ Active หลังจากผู้ใช้ login"
+}
+
+//////////////////////////////////////////////////////////
+// EVENT CORE
+//////////////////////////////////////////////////////////
+
+Table Event {
+  id text [pk, note: "Primary Key ของ Event"]
+  eventName varchar [note: "ชื่อ Event"]
+  eventDescription text [note: "รายละเอียด Event"]
+  location text [note: "สถานที่จัด (หรือ virtual)"]
+  showDashboard bool [note: "แสดง dashboard หรือไม่"]
+  publicJoin bool [note: "เปิดให้ join โดยไม่ใช้ password"]
+  passwordJoin varchar [note: "รหัสเข้าร่วม ถ้ามี"]
+  startJoinDate timestamp [note: "วันเริ่มรับสมัคร/เข้าร่วม"]
+  endJoinDate timestamp [note: "วันสิ้นสุดรับสมัคร/เข้าร่วม"]
+  publicView bool [note: "เปิดให้เข้าชมผลงานโดยไม่ใช้ password"]
+  passwordView varchar [note: "รหัสเข้าชม ถ้ามี"]
+  startView timestamp [note: "วันเริ่มเปิดให้เข้าชม"]
+  maxTeamMembers int [note: "จำนวนสมาชิกสูงสุดต่อทีม"]
+  virtualRewardGuest int [note: "ค่า default virtual reward สำหรับ Guest"]
+  virtualRewardCommittee int [note: "ค่า default virtual reward สำหรับ Committee"]
+  unitReward varchar [note: "หน่วยของ reward เช่น คะแนน, เหรียญ"]
+  maxTeams int [note: "จำนวนทีมสูงสุดที่อนุญาตใน Event"]
+  showTopTeams int [note: "จำนวนทีมสูงสุดที่จะแสดงใน Ranking เช่น 5 ทีม"]
+  createdAt timestamp [note: "เวลาที่สร้าง Event"]
+  updatedAt timestamp [note: "เวลาที่อัพเดต Event"]
+
+  Note: "กิจกรรมที่จัดขึ้นในระบบ"
+}
+
+//////////////////////////////////////////////////////////
+// PARTICIPANTS
+//////////////////////////////////////////////////////////
+
+Table EventParticipant {
+  id text [pk, note: "Primary Key ของ EventParticipant"]
+  eventId text [ref: > Event.id, note: "Event ที่เข้าร่วม"]
+  userId text [ref: > User.id, note: "User ที่เข้าร่วม Event"]
+  group EventGroup [note: "บทบาทของผู้ใช้ใน Event (เลือกได้แค่ 1 ต่อ Event)"]
+  teamId text [ref: > Team.id, note: "ทีมที่สังกัด ถ้า group = PRESENTER, ถ้าไม่ใช่ → null"]
+  virtualReward int [note: "จำนวน virtual reward เริ่มต้น (เฉพาะ Guest/Committee)"]
+
+  Note: "ผู้เข้าร่วม Event → User 1 คนใน 1 Event จะมีได้แค่ 1 group"
+}
+
+//////////////////////////////////////////////////////////
+// TEAM & PRESENTER
+//////////////////////////////////////////////////////////
+
+Table Team {
+  id text [pk, note: "Primary Key ของ Team"]
+  eventId text [ref: > Event.id, note: "Event ที่ทีมเข้าร่วม"]
+  teamName varchar [note: "ชื่อทีม"]
+  description text [note: "รายละเอียดทีม"]
+  createdAt timestamp [note: "เวลาที่สร้างทีม"]
+
+  Note: "ทีมที่เข้าร่วมแสดงผลงาน"
+}
+
+//////////////////////////////////////////////////////////
+// FILE MANAGEMENT
+//////////////////////////////////////////////////////////
+
+Table EventFileType {
+  id text [pk, note: "Primary Key ของ EventFileType"]
+  eventId text [ref: > Event.id, note: "Event ที่กำหนด requirement นี้"]
+  name varchar [note: "ชื่อ requirement เช่น Poster, Report"]
+  description text [note: "รายละเอียดเพิ่มเติม เช่น ขนาดโปสเตอร์"]
+  allowedFileType FileType [note: "ประเภทไฟล์ที่อนุญาต"]
+  isRequired bool [note: "บังคับหรือไม่"]
+  createdAt timestamp [note: "เวลาที่สร้าง requirement นี้"]
+
+  Note: "สิ่งที่ Organizer กำหนดให้ทีมต้องส่งไฟล์/ลิงก์"
+}
+
+Table TeamFile {
+  id text [pk, note: "Primary Key ของ TeamFile"]
+  teamId text [ref: > Team.id, note: "ทีมที่ส่งไฟล์"]
+  fileTypeId text [ref: > EventFileType.id, note: "อ้างอิงกับ requirement ที่กำหนด"]
+  fileUrl text [note: "ลิงก์ไฟล์หรือ URL ที่อัพโหลด"]
+  uploadedAt timestamp [note: "เวลาที่ทีมอัพโหลดไฟล์"]
+
+  Note: "ไฟล์/ลิงก์ที่ทีม Presenter ส่งเข้ามาจริง"
+}
+
+//////////////////////////////////////////////////////////
+// REWARD & FEEDBACK & COMMENT
+//////////////////////////////////////////////////////////
+
+Table TeamReward {
+  id text [pk, note: "Primary Key ของ TeamReward"]
+  eventId text [ref: > Event.id, note: "Event ที่เกี่ยวข้อง"]
+  teamId text [ref: > Team.id, note: "ทีมที่ได้รับ reward"]
+  giverId text [ref: > User.id, note: "ผู้ที่ให้ reward (Guest, Committee, Organizer)"]
+  reward int [note: "จำนวน reward ที่ให้ เช่น คะแนน, เหรียญ"]
+  createdAt timestamp [note: "เวลาที่ให้ reward"]
+
+  Note: "Log การให้ reward จากผู้เข้าร่วมไปยังทีม สามารถให้ซ้ำได้หลายครั้ง ใช้สำหรับ ranking"
+}
+
+Table CommitteeFeedback {
+  id text [pk, note: "Primary Key ของ Feedback"]
+  eventId text [ref: > Event.id, note: "Event ที่เกี่ยวข้อง"]
+  teamId text [ref: > Team.id, note: "ทีมที่ได้รับ feedback"]
+  committeeId text [ref: > EventParticipant.id, note: "กรรมการที่ให้ feedback (group=COMMITTEE)"]
+  content text [note: "ข้อความ feedback"]
+  createdAt timestamp [note: "เวลาที่ให้ feedback"]
+
+  Note: "Feedback ที่กรรมการให้ทีม เห็นได้เฉพาะทีมและกรรมการ ไม่ใช่สาธารณะ"
+}
+
+Table Comment {
+  id text [pk, note: "Primary Key ของ Comment"]
+  eventId text [ref: > Event.id, note: "Event ที่ comment เกี่ยวข้อง"]
+  teamId text [ref: > Team.id, note: "ทีมที่ comment เกี่ยวกับ (optional)"]
+  userId text [ref: > User.id, note: "User ที่เขียน comment (ต้องเป็น EventParticipant ของ Event)"]
+  content text [note: "ข้อความ comment"]
+  createdAt timestamp [note: "เวลาที่สร้าง comment"]
+
+  Note: "ความคิดเห็นสาธารณะจากผู้เข้าร่วม Event (Organizer, Presenter, Guest, Committee) เห็นได้ทุกคน"
+}
+
+//////////////////////////////////////////////////////////
+// EVENT RATING & RANKING
+//////////////////////////////////////////////////////////
+
+Table EventRating {
+  id text [pk, note: "Primary Key ของ EventRating"]
+  eventId text [ref: > Event.id, note: "Event ที่ถูกให้ดาว"]
+  userId text [ref: > User.id, note: "ผู้ใช้ที่ให้ดาว"]
+  rating int [note: "จำนวนดาว 1-5"]
+  comment text [note: "ข้อความรีวิว (optional)"]
+  createdAt timestamp [note: "เวลาที่ให้ดาว"]
+
+  Note: "การให้ดาว/รีวิว Event โดยผู้เข้าร่วม → 1 คนให้ 1 ครั้งต่อ Event"
+}
+
+Table TeamRanking {
+  id text [pk, note: "Primary Key ของ TeamRanking"]
+  eventId text [ref: > Event.id, note: "Event ที่เกี่ยวข้อง"]
+  teamId text [ref: > Team.id, note: "ทีมที่ได้อันดับ"]
+  rank int [note: "อันดับทีมใน Event"]
+  totalReward int [note: "คะแนนรวมทั้งหมดของทีม"]
+  createdAt timestamp [note: "เวลาที่สรุปผล"]
+
+  Note: "บันทึกอันดับทีมใน Event ใช้โชว์บนโปรไฟล์และ leaderboard"
+}
+
+Table SpecialReward {
+  id text [pk, note: "Primary Key ของ SpecialReward"]
+  eventId text [ref: > Event.id, note: "Event ที่สร้างรางวัลพิเศษนี้"]
+  name varchar [note: "ชื่อรางวัล เช่น Most Creative"]
+  description text [note: "รายละเอียดเพิ่มเติม เช่น เงื่อนไข"]
+  createdAt timestamp [note: "เวลาที่สร้างรางวัล"]
+
+  Note: "รางวัลพิเศษที่ Organizer กำหนดในแต่ละ Event มีได้หลายรางวัล"
+}
+
+Table SpecialRewardVote {
+  id text [pk, note: "Primary Key ของ SpecialRewardVote"]
+  rewardId text [ref: > SpecialReward.id, note: "รางวัลพิเศษที่โหวต"]
+  committeeId text [ref: > EventParticipant.id, note: "กรรมการที่โหวต (group=COMMITTEE)"]
+  teamId text [ref: > Team.id, note: "ทีมที่ถูกโหวต"]
+  createdAt timestamp [note: "เวลาที่โหวต"]
+
+  Note: "Committee 1 คนสามารถโหวตได้ 1 ครั้งต่อรางวัล"
+}

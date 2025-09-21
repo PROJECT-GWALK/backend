@@ -8,7 +8,7 @@ app.get('/', (c) => {
   return c.text('Hello Hono!')
 })
 
-app.route("/api/protected", protectedRoute);
+app.route("/api/user/@me", protectedRoute);
 
 serve({
   fetch: app.fetch,

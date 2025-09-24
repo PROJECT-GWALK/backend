@@ -15,8 +15,10 @@ services:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_APP_USER=${POSTGRES_APP_USER}
       - POSTGRES_APP_PASSWORD=${POSTGRES_APP_PASSWORD}
+      - TZ=Asia/Bangkok
     networks:
       - project-net
+    command: ["-c", "timezone=Asia/Bangkok"]
 
 volumes:
   project-data:

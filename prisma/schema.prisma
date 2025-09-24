@@ -1,3 +1,6 @@
+//////////////////////////////////////////////////////////
+// GENERATOR & DATASOURCE
+//////////////////////////////////////////////////////////
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,25 +10,53 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+//////////////////////////////////////////////////////////
+// ENUM
+//////////////////////////////////////////////////////////
 enum Role {
   USER
   ADMIN
 }
 
-model User {
-  id          String   @id @default(uuid()) @db.Uuid
-  email       String?  @unique
-  username    String?  @unique
-  name        String?
-  image       String?
-  description String?
-  role        Role     @default(USER)
-  emailVerified DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+enum FileType {
+  jpg
+  png
+  pdf
+  url
+}
 
-  accounts   Account[]
-  sessions   Session[]
+enum EventGroup {
+  ORGANIZER
+  PRESENTER
+  GUEST
+  COMMITTEE
+}
+
+//////////////////////////////////////////////////////////
+// AUTH
+//////////////////////////////////////////////////////////
+model User {
+  id            String    @id @default(uuid()) @db.Uuid
+  email         String?   @unique
+  username      String?   @unique
+  name          String?
+  image         String?
+  description   String?
+  role          Role      @default(USER)
+  emailVerified DateTime? @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
+
+  accounts     Account[]
+  sessions     Session[]
+  reportsBy    UserReport[]       @relation("ReportsBy")
+  reportsTo    UserReport[]       @relation("ReportsTo")
+  bans         UserBan[]          @relation("BannedBy")
+  participants EventParticipant[]
+  rewardsGiven TeamReward[]       @relation("RewardGiver")
+  comments     Comment[]
+  ratings      EventRating[]
+  dailyActives UserDailyActive[]
 }
 
 model Account {
@@ -43,6 +74,7 @@ model Account {
   session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@unique([provider, providerAccountId])
 }
 
@@ -50,7 +82,245 @@ model Session {
   id           String   @id @default(uuid()) @db.Uuid
   sessionToken String   @unique
   userId       String   @db.Uuid
-  expires      DateTime
+  expires      DateTime @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+//////////////////////////////////////////////////////////
+// EVENT CORE
+//////////////////////////////////////////////////////////
+model Event {
+  id                     String    @id @default(uuid()) @db.Uuid
+  eventName              String
+  eventDescription       String?
+  location               String?
+  showDashboard          Boolean   @default(false)
+  publicJoin             Boolean   @default(true)
+  passwordJoin           String?
+  startJoinDate          DateTime? @db.Timestamptz(3)
+  endJoinDate            DateTime? @db.Timestamptz(3)
+  publicView             Boolean   @default(true)
+  passwordView           String?
+  startView              DateTime? @db.Timestamptz(3)
+  maxTeamMembers         Int?
+  virtualRewardGuest     Int       @default(0)
+  virtualRewardCommittee Int       @default(0)
+  unitReward             String?
+  maxTeams               Int?
+  showTopTeams           Int?      @default(3)
+  createdAt              DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime  @updatedAt @db.Timestamptz(3)
+
+  participants   EventParticipant[]
+  teams          Team[]
+  fileTypes      EventFileType[]
+  rewards        TeamReward[]
+  feedbacks      CommitteeFeedback[]
+  comments       Comment[]
+  ratings        EventRating[]
+  rankings       TeamRanking[]
+  specialRewards SpecialReward[]
+}
+
+//////////////////////////////////////////////////////////
+// PARTICIPANTS
+//////////////////////////////////////////////////////////
+model EventParticipant {
+  id            String     @id @default(uuid()) @db.Uuid
+  eventId       String     @db.Uuid
+  userId        String     @db.Uuid
+  eventGroup    EventGroup
+  teamId        String?    @db.Uuid
+  virtualReward Int        @default(0)
+  isLeader      Boolean    @default(false)
+
+  event     Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team      Team?               @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  feedbacks CommitteeFeedback[]
+  votes     SpecialRewardVote[]
+}
+
+//////////////////////////////////////////////////////////
+// TEAM & PRESENTER
+//////////////////////////////////////////////////////////
+model Team {
+  id          String   @id @default(uuid()) @db.Uuid
+  eventId     String   @db.Uuid
+  teamName    String
+  description String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  event        Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  participants EventParticipant[]
+  files        TeamFile[]
+  rewards      TeamReward[]
+  feedbacks    CommitteeFeedback[]
+  comments     Comment[]
+  rankings     TeamRanking[]
+  votes        SpecialRewardVote[]
+}
+
+//////////////////////////////////////////////////////////
+// FILE MANAGEMENT
+//////////////////////////////////////////////////////////
+model EventFileType {
+  id              String   @id @default(uuid()) @db.Uuid
+  eventId         String   @db.Uuid
+  name            String
+  description     String?
+  allowedFileType FileType
+  isRequired      Boolean  @default(false)
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  event     Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  teamFiles TeamFile[]
+}
+
+model TeamFile {
+  id         String   @id @default(uuid()) @db.Uuid
+  teamId     String   @db.Uuid
+  fileTypeId String   @db.Uuid
+  fileUrl    String
+  uploadedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  team     Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  fileType EventFileType @relation(fields: [fileTypeId], references: [id], onDelete: Cascade)
+}
+
+//////////////////////////////////////////////////////////
+// REWARD & FEEDBACK & COMMENT
+//////////////////////////////////////////////////////////
+model TeamReward {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @db.Uuid
+  teamId    String   @db.Uuid
+  giverId   String   @db.Uuid
+  reward    Int
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  team  Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  giver User  @relation("RewardGiver", fields: [giverId], references: [id], onDelete: Cascade)
+}
+
+model CommitteeFeedback {
+  id          String   @id @default(uuid()) @db.Uuid
+  eventId     String   @db.Uuid
+  teamId      String   @db.Uuid
+  committeeId String   @db.Uuid
+  content     String
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  event     Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  team      Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  committee EventParticipant @relation(fields: [committeeId], references: [id], onDelete: Cascade)
+}
+
+model Comment {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @db.Uuid
+  teamId    String?  @db.Uuid
+  userId    String   @db.Uuid
+  content   String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  team  Team? @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+//////////////////////////////////////////////////////////
+// EVENT RATING & RANKING
+//////////////////////////////////////////////////////////
+model EventRating {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @db.Uuid
+  userId    String   @db.Uuid
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId]) // 1 user rate 1 event
+}
+
+model TeamRanking {
+  id          String   @id @default(uuid()) @db.Uuid
+  eventId     String   @db.Uuid
+  teamId      String   @db.Uuid
+  rank        Int
+  totalReward Int
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  team  Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+}
+
+model SpecialReward {
+  id          String   @id @default(uuid()) @db.Uuid
+  eventId     String   @db.Uuid
+  name        String
+  description String?
+  image       String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  event Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  votes SpecialRewardVote[]
+}
+
+model SpecialRewardVote {
+  id          String   @id @default(uuid()) @db.Uuid
+  rewardId    String   @db.Uuid
+  committeeId String   @db.Uuid
+  teamId      String   @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  reward    SpecialReward    @relation(fields: [rewardId], references: [id], onDelete: Cascade)
+  committee EventParticipant @relation(fields: [committeeId], references: [id], onDelete: Cascade)
+  team      Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([rewardId, committeeId])
+}
+
+//////////////////////////////////////////////////////////
+// REPORT & BAN
+//////////////////////////////////////////////////////////
+model UserReport {
+  id         String   @id @default(uuid()) @db.Uuid
+  reporterId String   @db.Uuid
+  reportedId String   @db.Uuid
+  reason     String
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  reporter User @relation("ReportsBy", fields: [reporterId], references: [id], onDelete: Cascade)
+  reported User @relation("ReportsTo", fields: [reportedId], references: [id], onDelete: Cascade)
+}
+
+model UserBan {
+  id        String    @id @default(uuid()) @db.Uuid
+  email     String    @unique
+  reason    String?
+  bannedBy  String    @db.Uuid
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt DateTime? @db.Timestamptz(3)
+
+  admin User @relation("BannedBy", fields: [bannedBy], references: [id], onDelete: Cascade)
+}
+
+//////////////////////////////////////////////////////////
+// DAILY ACTIVE USERS
+//////////////////////////////////////////////////////////
+model UserDailyActive {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  date      DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date]) // กัน user เดียวกันถูกนับซ้ำในวันเดียว
 }

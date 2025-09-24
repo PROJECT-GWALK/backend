@@ -1,6 +1,6 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
-import protectedRoute from './routes/userinfo.js'
+import userinfoRoute from './routes/userinfo.js'
 
 const app = new Hono()
 
@@ -8,7 +8,7 @@ app.get('/', (c) => {
   return c.text('Hello Hono!')
 })
 
-app.route("/api/user/@me", protectedRoute);
+app.route("/api/user/@me", userinfoRoute);
 
 serve({
   fetch: app.fetch,

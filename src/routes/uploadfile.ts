@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { getMinio } from "../lib/minio.js";
-import { nanoid } from "nanoid";
 
 const uploadRoute = new Hono();
 
@@ -13,22 +12,14 @@ uploadRoute.post("/", async (c) => {
   }
 
   const minio = getMinio();
-  const bucketName = "uploads";
+  const bucketName = process.env.OBJ_BUCKET!;
+  const objectName = `uploads/${Date.now()}-${file.name}`;
 
-  // สร้าง bucket ถ้ายังไม่มี
-  const exists = await minio.bucketExists(bucketName).catch(() => false);
-  if (!exists) {
-    await minio.makeBucket(bucketName, "us-east-1");
-  }
-
-  const objectName = `${nanoid()}-${file.name}`;
   const buffer = Buffer.from(await file.arrayBuffer());
-
   await minio.putObject(bucketName, objectName, buffer);
 
-  const fileUrl = `${process.env.MINIO_PUBLIC_URL}/${bucketName}/${objectName}`;
-
-  return c.json({ message: "ok", url: fileUrl });
+  return c.json({
+    message: "ok",
+    url: `/backend/files/${bucketName}/${objectName}`, 
+  });
 });
-
-export default uploadRoute;

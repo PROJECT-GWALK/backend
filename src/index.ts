@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import userinfoRoute from './routes/userinfo.js'
 import userManagement from './routes/usermanagement.js'
 import adminDashboard from './routes/admindashboard.js'
+import filesRoute from './routes/files.js'
 
 const app = new Hono()
 
@@ -13,6 +14,7 @@ app.get('/', (c) => {
 //////////////////////////////////////////////////////////
 // USER
 //////////////////////////////////////////////////////////
+app.route("/files", filesRoute);
 app.route("/api/user/@me", userinfoRoute);
 
 

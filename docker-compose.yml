@@ -20,19 +20,20 @@ services:
       - project-net
     command: ["-c", "timezone=Asia/Bangkok"]
 
-  # docker run -d -p 9000:9000 -p 9090:9090 --name minio -v minio-data:/data -e "MINIO_ROOT_USER=root" -e "MINIO_ROOT_PASSWORD=12345678" quay.io/minio/minio server /data --console-address ":9090"
   minio:
     image: minio/minio:latest
     container_name: ${PROJECT_NAME}-minio
     restart: always
     volumes:
       - minio-data:/data
+      - ./_entrypoint/init_minio.sh:/docker-entrypoint-init.d/init_minio.sh:ro
     ports:
       - "9000:9000"
       - "9090:9090"
     environment:
-      - MINIO_ROOT_USER=root
-      - MINIO_ROOT_PASSWORD=12345678
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - OBJ_BUCKET=${OBJ_BUCKET}
     command: server /data --console-address ":9090"
     networks:
       - project-net

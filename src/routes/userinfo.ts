@@ -46,18 +46,19 @@ userRoute.put("/", async (c) => {
   if (form["username"]) updateData.username = form["username"];
   if (form["name"]) updateData.name = form["name"];
   if (form["description"]) updateData.description = form["description"];
+  if (form["image"] === "null") {
+    updateData.image = null;
+  }
 
   const file = form["file"] as File | undefined;
   if (file) {
-    const bucket = "user-avatars";
-    const exists = await minio.bucketExists(bucket).catch(() => false);
-    if (!exists) await minio.makeBucket(bucket, "us-east-1");
+    const bucket = process.env.OBJ_BUCKET!;
+    const objectName = `user-avatars/${user.id}-${Date.now()}-${file.name}`;
 
-    const objectName = `${user.id}-${Date.now()}-${file.name}`;
     const buffer = Buffer.from(await file.arrayBuffer());
     await minio.putObject(bucket, objectName, buffer);
 
-    updateData.image = `${process.env.MINIO_PUBLIC_URL}/${bucket}/${objectName}`;
+    updateData.image = `/backend/files/${bucket}/${objectName}`;
   }
 
   const updatedUser = await prisma.user.update({

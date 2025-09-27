@@ -8,9 +8,11 @@ const userManagement = new Hono();
 userManagement
   .use("*", authMiddleware, adminOnly)
 
-  // ✅ Get all users + banned status
   .get("/", async (c) => {
+    const roleParam = c.req.query("role") as "ADMIN" | "USER" | undefined;
+
     const allUsers = await prisma.user.findMany({
+      where: roleParam ? { role: roleParam } : undefined,
       select: {
         id: true,
         name: true,
@@ -22,12 +24,10 @@ userManagement
       orderBy: { name: "asc" },
     });
 
-    // ดึง userBan ที่ active (ยังไม่หมดอายุ)
     const bans = await prisma.userBan.findMany({
       select: { email: true, expiresAt: true },
     });
 
-    // แปลงเป็น set สำหรับเช็ค banned
     const bannedEmails = new Set(
       bans
         .filter((b) => !b.expiresAt || b.expiresAt > new Date())
@@ -42,7 +42,6 @@ userManagement
     return c.json({ message: "ok", users: usersWithStatus });
   })
 
-  // ✅ Update role
   .put("/:id/role", async (c) => {
     const { id } = c.req.param();
     const { role } = await c.req.json<{ role: "USER" | "ADMIN" }>();
@@ -60,7 +59,6 @@ userManagement
     return c.json({ message: "role updated", user: updated });
   })
 
-  // ✅ Delete user
   .delete("/:id", async (c) => {
     const { id } = c.req.param();
 
@@ -71,7 +69,6 @@ userManagement
     return c.json({ message: "user deleted" });
   })
 
-  // ✅ Ban user
   .post("/:id/ban", async (c) => {
     const { id } = c.req.param();
     const { reason, expiresAt } = await c.req.json<{
@@ -97,7 +94,6 @@ userManagement
     return c.json({ message: "user banned", email: user.email });
   })
 
-  // ✅ Unban user
   .post("/:id/unban", async (c) => {
     const { id } = c.req.param();
     const user = await prisma.user.findUnique({ where: { id } });

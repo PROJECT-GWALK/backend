@@ -32,6 +32,11 @@ enum EventGroup {
   COMMITTEE
 }
 
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+}
+
 //////////////////////////////////////////////////////////
 // AUTH
 //////////////////////////////////////////////////////////
@@ -91,26 +96,29 @@ model Session {
 // EVENT CORE
 //////////////////////////////////////////////////////////
 model Event {
-  id                     String    @id @default(uuid()) @db.Uuid
+  id                     String      @id @default(uuid()) @db.Uuid
   eventName              String
   eventDescription       String?
   location               String?
-  showDashboard          Boolean   @default(false)
-  publicJoin             Boolean   @default(true)
+  locationName           String?
+  showDashboard          Boolean     @default(false)
+  publicJoin             Boolean     @default(true)
   passwordJoin           String?
-  startJoinDate          DateTime? @db.Timestamptz(3)
-  endJoinDate            DateTime? @db.Timestamptz(3)
-  publicView             Boolean   @default(true)
+  startJoinDate          DateTime?   @db.Timestamptz(3)
+  endJoinDate            DateTime?   @db.Timestamptz(3)
+  publicView             Boolean     @default(true)
   passwordView           String?
-  startView              DateTime? @db.Timestamptz(3)
+  startView              DateTime?   @db.Timestamptz(3)
   maxTeamMembers         Int?
-  virtualRewardGuest     Int       @default(0)
-  virtualRewardCommittee Int       @default(0)
+  virtualRewardGuest     Int         @default(0)
+  virtualRewardCommittee Int         @default(0)
   unitReward             String?
   maxTeams               Int?
-  showTopTeams           Int?      @default(3)
-  createdAt              DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt              DateTime  @updatedAt @db.Timestamptz(3)
+  showTopTeams           Int?        @default(3)
+  status                 EventStatus @default(DRAFT)
+  currentStep            Int         @default(1)
+  createdAt              DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime    @updatedAt @db.Timestamptz(3)
 
   participants   EventParticipant[]
   teams          Team[]

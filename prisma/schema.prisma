@@ -101,6 +101,8 @@ model Event {
   eventDescription       String?
   location               String?
   locationName           String?
+  imageCover             String?
+  hasCommittee           Boolean     @default(false)
   showDashboard          Boolean     @default(false)
   publicJoin             Boolean     @default(true)
   passwordJoin           String?
@@ -114,7 +116,6 @@ model Event {
   virtualRewardCommittee Int         @default(0)
   unitReward             String?
   maxTeams               Int?
-  showTopTeams           Int?        @default(3)
   status                 EventStatus @default(DRAFT)
   currentStep            Int         @default(1)
   createdAt              DateTime    @default(now()) @db.Timestamptz(3)
@@ -138,7 +139,7 @@ model EventParticipant {
   id            String     @id @default(uuid()) @db.Uuid
   eventId       String     @db.Uuid
   userId        String     @db.Uuid
-  eventGroup    EventGroup
+  eventGroup    EventGroup?
   teamId        String?    @db.Uuid
   virtualReward Int        @default(0)
   isLeader      Boolean    @default(false)
@@ -178,7 +179,7 @@ model EventFileType {
   eventId         String   @db.Uuid
   name            String
   description     String?
-  allowedFileType FileType
+  allowedFileType FileType?
   isRequired      Boolean  @default(false)
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
 

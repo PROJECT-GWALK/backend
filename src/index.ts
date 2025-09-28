@@ -4,6 +4,7 @@ import userinfoRoute from './routes/userinfo.js'
 import userManagement from './routes/usermanagement.js'
 import adminDashboard from './routes/admindashboard.js'
 import filesRoute from './routes/files.js'
+import eventRoute from './routes/event.js'
 
 const app = new Hono()
 
@@ -16,6 +17,7 @@ app.get('/', (c) => {
 //////////////////////////////////////////////////////////
 app.route("/files", filesRoute);
 app.route("/api/user/@me", userinfoRoute);
+app.route("/api/events", eventRoute)
 
 
 //////////////////////////////////////////////////////////

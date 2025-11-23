@@ -5,6 +5,8 @@ import userManagement from './routes/usermanagement.js'
 import adminDashboard from './routes/admindashboard.js'
 import filesRoute from './routes/files.js'
 import eventRoute from './routes/event.js'
+import { swaggerUI } from '@hono/swagger-ui'
+import { openApiDoc } from './swingger/ApiDoc.js'
 
 const app = new Hono()
 
@@ -13,9 +15,13 @@ app.get('/', (c) => {
 })
 
 //////////////////////////////////////////////////////////
-// USER
+// BUCKET FILES
 //////////////////////////////////////////////////////////
 app.route("/files", filesRoute);
+
+//////////////////////////////////////////////////////////
+// USER
+//////////////////////////////////////////////////////////
 app.route("/api/user/@me", userinfoRoute);
 app.route("/api/events", eventRoute)
 
@@ -25,6 +31,16 @@ app.route("/api/events", eventRoute)
 //////////////////////////////////////////////////////////
 app.route("api/usermanagement", userManagement)
 app.route("api/admindashboard", adminDashboard)
+
+//////////////////////////////////////////////////////////
+// SWAGGER UI
+//////////////////////////////////////////////////////////
+app.get('/openapi.json', (c) => {
+  return c.json(openApiDoc)
+})
+app.get('/apiDoc', swaggerUI({
+  url: '/openapi.json'
+}))
 
 serve({
   fetch: app.fetch,

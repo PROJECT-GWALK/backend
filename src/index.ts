@@ -10,9 +10,15 @@ import { openApiDoc } from './swingger/ApiDoc.js'
 
 const app = new Hono()
 
-app.get('/', (c) => {
-  return c.text('Hello Hono!')
+//////////////////////////////////////////////////////////
+// SWAGGER UI
+//////////////////////////////////////////////////////////
+app.get('/openapi.json', (c) => {
+  return c.json(openApiDoc)
 })
+app.get('/', swaggerUI({
+  url: '/openapi.json'
+}))
 
 //////////////////////////////////////////////////////////
 // BUCKET FILES
@@ -31,16 +37,6 @@ app.route("/api/events", eventRoute)
 //////////////////////////////////////////////////////////
 app.route("api/usermanagement", userManagement)
 app.route("api/admindashboard", adminDashboard)
-
-//////////////////////////////////////////////////////////
-// SWAGGER UI
-//////////////////////////////////////////////////////////
-app.get('/openapi.json', (c) => {
-  return c.json(openApiDoc)
-})
-app.get('/apiDoc', swaggerUI({
-  url: '/openapi.json'
-}))
 
 serve({
   fetch: app.fetch,

@@ -435,24 +435,14 @@ export const openApiDoc = {
             }
           }
         },
-        responses: {
-          "200": {
-            description: "Event created",
-            content: {
-              "application/json": {
-                schema: { type: "object", properties: { message: { type: "string" }, event: { type: "object", properties: { id: { type: "string" }, eventName: { type: "string" }, status: { type: "string", enum: ["DRAFT", "PUBLISHED"] } } } } }
-              }
-            }
-          },
-          "409": { description: "Event name already exists" }
-        }
+        responses: { "200": { description: "Event created" }, "409": { description: "Event name already exists" } }
       }
     },
 
     "/api/events/{id}": {
       get: {
         tags: ["Events"],
-        summary: "Get event (owner-only)",
+        summary: "Get event (access depends on status/publicView)",
         security: [{ SessionToken: [] }],
         parameters: [ { name: "id", in: "path", required: true, schema: { type: "string" } } ],
         responses: { "200": { description: "OK" }, "403": { description: "Forbidden" }, "404": { description: "Not found" } }
@@ -466,15 +456,7 @@ export const openApiDoc = {
           required: true,
           content: {
             "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  eventName: { type: "string" },
-                  eventDescription: { type: "string" },
-                  locationName: { type: "string" },
-                  location: { type: "string" }
-                }
-              }
+              schema: { type: "object", properties: { eventName: { type: "string" }, eventDescription: { type: "string" }, locationName: { type: "string" }, location: { type: "string" } } }
             }
           }
         },
@@ -485,10 +467,7 @@ export const openApiDoc = {
         summary: "Delete event (draft-only, leader)",
         security: [{ SessionToken: [] }],
         parameters: [ { name: "id", in: "path", required: true, schema: { type: "string" } } ],
-        responses: {
-          "200": { description: "Deleted", content: { "application/json": { schema: { type: "object", properties: { message: { type: "string" }, deletedId: { type: "string" } } } } } },
-          "400": { description: "Only draft events can be deleted" }
-        }
+        responses: { "200": { description: "Deleted" }, "400": { description: "Only draft events can be deleted" } }
       }
     },
 
@@ -498,14 +477,8 @@ export const openApiDoc = {
         summary: "Invite organizer (leader-only)",
         security: [{ SessionToken: [] }],
         parameters: [ { name: "id", in: "path", required: true, schema: { type: "string" } } ],
-        requestBody: {
-          required: true,
-          content: { "application/json": { schema: { type: "object", properties: { email: { type: "string" } }, required: ["email"] } } }
-        },
-        responses: {
-          "200": { description: "Invite URL generated", content: { "application/json": { schema: { type: "object", properties: { message: { type: "string" }, inviteUrl: { type: "string" } } } } } },
-          "404": { description: "User not found" }
-        }
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { email: { type: "string" } }, required: ["email"] } } } },
+        responses: { "200": { description: "Invite URL generated" }, "404": { description: "User not found" } }
       }
     },
 
@@ -541,5 +514,13 @@ export const openApiDoc = {
       }
     },
 
+    "/api/events/me/drafts": {
+      get: {
+        tags: ["Events"],
+        summary: "My draft events",
+        security: [{ SessionToken: [] }],
+        responses: { "200": { description: "OK" } }
+      }
+    },
   },
 };

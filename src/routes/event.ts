@@ -8,19 +8,72 @@ const eventRoute = new Hono<{ Variables: { user: User } }>();
 
 eventRoute.use("*", authMiddleware);
 
+eventRoute.get("/:id", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+
+  const event = await prisma.event.findUnique({
+    where: { id },
+    include: {
+      fileTypes: true,
+      specialRewards: true,
+      participants: { include: { user: true } },
+    },
+  });
+  if (!event) {
+    return c.json({ message: "Event not found" }, 404);
+  }
+
+  if (event.status === "DRAFT") {
+    const organizer = await prisma.eventParticipant.findFirst({
+      where: { eventId: id, userId: user.id, eventGroup: "ORGANIZER" },
+    });
+    if (!organizer) {
+      return c.json({ message: "Forbidden" }, 403);
+    }
+    return c.json({ message: "ok", event });
+  }
+
+  if (event.publicView) {
+    return c.json({ message: "ok", event });
+  }
+
+  const participant = await prisma.eventParticipant.findFirst({
+    where: { eventId: id, userId: user.id },
+  });
+  if (!participant) {
+    return c.json({ message: "Forbidden" }, 403);
+  }
+
+  return c.json({ message: "ok", event });
+});
+
 eventRoute.post("/", async (c) => {
   const user = c.get("user");
   const body = await c.req.json().catch(() => ({}));
   const eventName = body.eventName;
-  if (!eventName || typeof eventName !== "string" || eventName.trim().length < 1) {
+  if (
+    !eventName ||
+    typeof eventName !== "string" ||
+    eventName.trim().length < 1
+  ) {
     return c.json({ message: "Event name is required" }, 400);
   }
   const exists = await prisma.event.findFirst({ where: { eventName } });
   if (exists) {
     return c.json({ message: "Event name already exists" }, 409);
   }
-  const event = await prisma.event.create({ data: { eventName, status: "DRAFT" } });
-  await prisma.eventParticipant.create({ data: { eventId: event.id, userId: user.id, eventGroup: "ORGANIZER", isLeader: true } });
+  const event = await prisma.event.create({
+    data: { eventName, status: "DRAFT" },
+  });
+  await prisma.eventParticipant.create({
+    data: {
+      eventId: event.id,
+      userId: user.id,
+      eventGroup: "ORGANIZER",
+      isLeader: true,
+    },
+  });
   return c.json({ message: "ok", event });
 });
 
@@ -32,12 +85,21 @@ eventRoute.put("/:id", async (c) => {
   if (!event) {
     return c.json({ message: "Event not found" }, 404);
   }
-  const leader = await prisma.eventParticipant.findFirst({ where: { eventId: id, userId: user.id, eventGroup: "ORGANIZER", isLeader: true } });
+  const leader = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId: id,
+      userId: user.id,
+      eventGroup: "ORGANIZER",
+      isLeader: true,
+    },
+  });
   if (!leader) {
     return c.json({ message: "Forbidden" }, 403);
   }
   if (body.eventName && body.eventName !== event.eventName) {
-    const dup = await prisma.event.findFirst({ where: { eventName: body.eventName } });
+    const dup = await prisma.event.findFirst({
+      where: { eventName: body.eventName },
+    });
     if (dup) {
       return c.json({ message: "Event name already exists" }, 409);
     }
@@ -61,7 +123,14 @@ eventRoute.delete("/:id", async (c) => {
   if (!event) {
     return c.json({ message: "Event not found" }, 404);
   }
-  const leader = await prisma.eventParticipant.findFirst({ where: { eventId: id, userId: user.id, eventGroup: "ORGANIZER", isLeader: true } });
+  const leader = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId: id,
+      userId: user.id,
+      eventGroup: "ORGANIZER",
+      isLeader: true,
+    },
+  });
   if (!leader) {
     return c.json({ message: "Forbidden" }, 403);
   }
@@ -76,7 +145,14 @@ eventRoute.post("/:id/organizers/invite", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
   const { email } = await c.req.json();
-  const leader = await prisma.eventParticipant.findFirst({ where: { eventId: id, userId: user.id, eventGroup: "ORGANIZER", isLeader: true } });
+  const leader = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId: id,
+      userId: user.id,
+      eventGroup: "ORGANIZER",
+      isLeader: true,
+    },
+  });
   if (!leader) {
     return c.json({ message: "Forbidden" }, 403);
   }
@@ -90,9 +166,14 @@ eventRoute.post("/:id/organizers/invite", async (c) => {
   const exp = Date.now() + 1000 * 60 * 60 * 24;
   const payload = JSON.stringify({ eventId: id, email, exp });
   const secret = process.env.INVITE_SECRET ?? "invite_secret";
-  const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+  const signature = crypto
+    .createHmac("sha256", secret)
+    .update(payload)
+    .digest("hex");
   const token = Buffer.from(payload).toString("base64") + "." + signature;
-  const inviteUrl = `/api/events/invites/accept?token=${encodeURIComponent(token)}`;
+  const inviteUrl = `/api/events/invites/accept?token=${encodeURIComponent(
+    token
+  )}`;
   return c.json({ message: "ok", inviteUrl });
 });
 
@@ -113,24 +194,48 @@ eventRoute.get("/invites/accept", async (c) => {
     return c.json({ message: "Invalid token" }, 400);
   }
   const secret = process.env.INVITE_SECRET ?? "invite_secret";
-  const expectedSig = crypto.createHmac("sha256", secret).update(payloadStr).digest("hex");
+  const expectedSig = crypto
+    .createHmac("sha256", secret)
+    .update(payloadStr)
+    .digest("hex");
   if (parts[1] !== expectedSig) {
     return c.json({ message: "Invalid token" }, 400);
   }
   const payload = JSON.parse(payloadStr);
-  if (!payload || !payload.eventId || !payload.email || !payload.exp || payload.exp < Date.now()) {
+  if (
+    !payload ||
+    !payload.eventId ||
+    !payload.email ||
+    !payload.exp ||
+    payload.exp < Date.now()
+  ) {
     return c.json({ message: "Invalid or expired token" }, 400);
   }
   if (!user.email || user.email !== payload.email) {
     return c.json({ message: "Forbidden" }, 403);
   }
-  const event = await prisma.event.findUnique({ where: { id: payload.eventId } });
+  const event = await prisma.event.findUnique({
+    where: { id: payload.eventId },
+  });
   if (!event) {
     return c.json({ message: "Event not found" }, 404);
   }
-  const exists = await prisma.eventParticipant.findFirst({ where: { eventId: payload.eventId, userId: user.id, eventGroup: "ORGANIZER" } });
+  const exists = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId: payload.eventId,
+      userId: user.id,
+      eventGroup: "ORGANIZER",
+    },
+  });
   if (!exists) {
-    await prisma.eventParticipant.create({ data: { eventId: payload.eventId, userId: user.id, eventGroup: "ORGANIZER", isLeader: false } });
+    await prisma.eventParticipant.create({
+      data: {
+        eventId: payload.eventId,
+        userId: user.id,
+        eventGroup: "ORGANIZER",
+        isLeader: false,
+      },
+    });
   }
   return c.json({ message: "ok" });
 });
@@ -139,11 +244,21 @@ eventRoute.put("/:id/publicview", async (c) => {
   const id = c.req.param("id");
   const user = c.get("user");
   const { publicView } = await c.req.json();
-  const leader = await prisma.eventParticipant.findFirst({ where: { eventId: id, userId: user.id, eventGroup: "ORGANIZER", isLeader: true } });
+  const leader = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId: id,
+      userId: user.id,
+      eventGroup: "ORGANIZER",
+      isLeader: true,
+    },
+  });
   if (!leader) {
     return c.json({ message: "Forbidden" }, 403);
   }
-  const updated = await prisma.event.update({ where: { id }, data: { publicView: !!publicView } });
+  const updated = await prisma.event.update({
+    where: { id },
+    data: { publicView: !!publicView },
+  });
   return c.json({ message: "ok", event: updated });
 });
 
@@ -151,7 +266,14 @@ eventRoute.post("/:id/submit", async (c) => {
   const id = c.req.param("id");
   const user = c.get("user");
   const body = await c.req.json().catch(() => ({}));
-  const leader = await prisma.eventParticipant.findFirst({ where: { eventId: id, userId: user.id, eventGroup: "ORGANIZER", isLeader: true } });
+  const leader = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId: id,
+      userId: user.id,
+      eventGroup: "ORGANIZER",
+      isLeader: true,
+    },
+  });
   if (!leader) {
     return c.json({ message: "Forbidden" }, 403);
   }
@@ -166,10 +288,42 @@ eventRoute.post("/:id/submit", async (c) => {
     where: { id },
     data: {
       status: "PUBLISHED",
-      publicView: typeof body.publicView === "boolean" ? body.publicView : event.publicView,
+      publicView:
+        typeof body.publicView === "boolean"
+          ? body.publicView
+          : event.publicView,
     },
   });
   return c.json({ message: "ok", event: submitted });
+});
+
+eventRoute.get("/me/drafts", async (c) => {
+  const user = c.get("user");
+  try {
+    const drafts = await prisma.event.findMany({
+      where: {
+        status: "DRAFT",
+        participants: {
+          some: {
+            userId: user.id,
+            eventGroup: "ORGANIZER",
+            isLeader: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        eventName: true,
+        currentStep: true,
+        createdAt: true,
+      },
+    });
+    return c.json({ message: "ok", events: drafts });
+  } catch (err) {
+    console.error("Get Draft Events error:", err);
+    return c.json({ message: "error fetching draft events" }, 500);
+  }
 });
 
 export default eventRoute;

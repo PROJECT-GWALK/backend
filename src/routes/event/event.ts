@@ -21,6 +21,7 @@ eventRoute.get("/me", async (c) => {
       eventName: true,
       status: true,
       createdAt: true,
+      imageCover: true,
       participants: {
         where: { userId: user.id },
         select: { eventGroup: true, isLeader: true },
@@ -32,6 +33,7 @@ eventRoute.get("/me", async (c) => {
     eventName: e.eventName,
     status: e.status,
     createdAt: e.createdAt,
+    imageCover: e.imageCover,
     role: e.participants?.[0]?.eventGroup || null,
     isLeader: e.participants?.[0]?.isLeader || false,
   }));
@@ -270,7 +272,7 @@ eventRoute.put("/:id", async (c) => {
           ? body.hasCommittee
           : event.hasCommittee,
     };
-    if ("imageCover" in body) data.imageCover = body.imageCover;
+    if ("imageCover" in body) data.imageCover = body.imageCover === "null" ? null : body.imageCover;
   }
 
   const sv = (
@@ -341,6 +343,7 @@ eventRoute.get("/me/drafts", async (c) => {
         id: true,
         eventName: true,
         createdAt: true,
+        imageCover: true,
       },
     });
     return c.json({ message: "ok", events: drafts });

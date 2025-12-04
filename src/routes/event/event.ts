@@ -299,6 +299,115 @@ eventRoute.put("/:id", async (c) => {
   return c.json({ message: "ok", event: updated });
 });
 
+eventRoute.post("/:id/special-rewards", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+  const leader = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id, eventGroup: "ORGANIZER", isLeader: true },
+  });
+  if (!leader) return c.json({ message: "Forbidden" }, 403);
+
+  const contentType = c.req.header("content-type") || "";
+  let data: any = {};
+  let file: File | undefined;
+  if (contentType.includes("multipart/form-data")) {
+    const form = await c.req.parseBody();
+    if (typeof form["name"] === "string") data.name = String(form["name"]);
+    if (typeof form["description"] === "string") data.description = String(form["description"]);
+    file = form["file"] as File | undefined;
+    const imgNull = form["image"];
+    if (imgNull === "null") data.image = null;
+    if (file) {
+      const minio = getMinio();
+      const bucket = process.env.OBJ_BUCKET!;
+      const objectName = `special-rewards/${eventId}-${Date.now()}-${file.name}`;
+      const buffer = Buffer.from(await file.arrayBuffer());
+      await minio.putObject(bucket, objectName, buffer);
+      data.image = `/backend/files/${bucket}/${objectName}`;
+    }
+  } else {
+    const body = await c.req.json().catch(() => ({}));
+    if (typeof body.name === "string") data.name = body.name;
+    if (typeof body.description === "string") data.description = body.description;
+    if ("image" in body) data.image = body.image === "null" ? null : body.image;
+  }
+
+  if (!data.name || typeof data.name !== "string" || data.name.trim().length < 1) {
+    return c.json({ message: "Reward name is required" }, 400);
+  }
+
+  const created = await prisma.specialReward.create({
+    data: { eventId, name: data.name, description: data.description, image: data.image },
+  });
+  return c.json({ message: "ok", reward: created });
+});
+
+eventRoute.put("/:id/special-rewards/:rewardId", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const rewardId = c.req.param("rewardId");
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+  const leader = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id, eventGroup: "ORGANIZER", isLeader: true },
+  });
+  if (!leader) return c.json({ message: "Forbidden" }, 403);
+
+  const reward = await prisma.specialReward.findUnique({ where: { id: rewardId } });
+  if (!reward || reward.eventId !== eventId) return c.json({ message: "Reward not found" }, 404);
+
+  const contentType = c.req.header("content-type") || "";
+  let data: any = {};
+  let file: File | undefined;
+  if (contentType.includes("multipart/form-data")) {
+    const form = await c.req.parseBody();
+    if (typeof form["name"] === "string") data.name = String(form["name"]);
+    if (typeof form["description"] === "string") data.description = String(form["description"]);
+    file = form["file"] as File | undefined;
+    const imgNull = form["image"];
+    if (imgNull === "null") data.image = null;
+    if (file) {
+      const minio = getMinio();
+      const bucket = process.env.OBJ_BUCKET!;
+      const objectName = `special-rewards/${eventId}-${rewardId}-${Date.now()}-${file.name}`;
+      const buffer = Buffer.from(await file.arrayBuffer());
+      await minio.putObject(bucket, objectName, buffer);
+      data.image = `/backend/files/${bucket}/${objectName}`;
+    }
+  } else {
+    const body = await c.req.json().catch(() => ({}));
+    if (typeof body.name === "string") data.name = body.name;
+    if (typeof body.description === "string") data.description = body.description;
+    if ("image" in body) data.image = body.image === "null" ? null : body.image;
+  }
+
+  const updatedReward = await prisma.specialReward.update({
+    where: { id: rewardId },
+    data,
+  });
+  return c.json({ message: "ok", reward: updatedReward });
+});
+
+eventRoute.delete("/:id/special-rewards/:rewardId", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const rewardId = c.req.param("rewardId");
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+  const leader = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id, eventGroup: "ORGANIZER", isLeader: true },
+  });
+  if (!leader) return c.json({ message: "Forbidden" }, 403);
+
+  const reward = await prisma.specialReward.findUnique({ where: { id: rewardId } });
+  if (!reward || reward.eventId !== eventId) return c.json({ message: "Reward not found" }, 404);
+
+  await prisma.specialReward.delete({ where: { id: rewardId } });
+  return c.json({ message: "ok", deletedId: rewardId });
+});
+
 eventRoute.delete("/:id", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");

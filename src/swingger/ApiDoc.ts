@@ -456,7 +456,50 @@ export const openApiDoc = {
           required: true,
           content: {
             "application/json": {
-              schema: { type: "object", properties: { eventName: { type: "string" }, eventDescription: { type: "string" }, locationName: { type: "string" }, location: { type: "string" } } }
+              schema: {
+                type: "object",
+                properties: {
+                  eventName: { type: "string" },
+                  eventDescription: { type: "string" },
+                  locationName: { type: "string" },
+                  location: { type: "string" },
+                  publicView: { type: "boolean" },
+                  startView: { type: "string", format: "date-time" },
+                  endView: { type: "string", format: "date-time" },
+                  startJoinDate: { type: "string", format: "date-time" },
+                  endJoinDate: { type: "string", format: "date-time" },
+                  maxTeamMembers: { type: "number" },
+                  maxTeams: { type: "number" },
+                  virtualRewardGuest: { type: "number" },
+                  virtualRewardCommittee: { type: "number" },
+                  hasCommittee: { type: "boolean" },
+                  imageCover: { type: "string" }
+                }
+              }
+            },
+            "multipart/form-data": {
+              schema: {
+                type: "object",
+                properties: {
+                  eventName: { type: "string" },
+                  eventDescription: { type: "string" },
+                  locationName: { type: "string" },
+                  location: { type: "string" },
+                  publicView: { type: "string" },
+                  hasCommittee: { type: "string" },
+                  currentStep: { type: "string" },
+                  startView: { type: "string", format: "date-time" },
+                  endView: { type: "string", format: "date-time" },
+                  startJoinDate: { type: "string", format: "date-time" },
+                  endJoinDate: { type: "string", format: "date-time" },
+                  maxTeamMembers: { type: "string" },
+                  maxTeams: { type: "string" },
+                  virtualRewardGuest: { type: "string" },
+                  virtualRewardCommittee: { type: "string" },
+                  imageCover: { type: "string" },
+                  file: { type: "string", format: "binary" }
+                }
+              }
             }
           }
         },
@@ -503,7 +546,7 @@ export const openApiDoc = {
       }
     },
 
-    "/api/events/{id}/submit": {
+    "/api/events/{id}/publish": {
       post: {
         tags: ["Events"],
         summary: "Publish event (leader-only)",
@@ -520,6 +563,215 @@ export const openApiDoc = {
         summary: "My draft events",
         security: [{ SessionToken: [] }],
         responses: { "200": { description: "OK" } }
+      }
+    },
+
+    "/api/events/me": {
+      get: {
+        tags: ["Events"],
+        summary: "My events (non-draft)",
+        security: [{ SessionToken: [] }],
+        responses: {
+          "200": {
+            description: "OK",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    events: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          eventName: { type: "string" },
+                          status: { type: "string" },
+                          createdAt: { type: "string", format: "date-time" },
+                          imageCover: { type: "string", nullable: true },
+                          role: { type: "string", nullable: true },
+                          isLeader: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/api/events/check-name/check": {
+      get: {
+        tags: ["Events"],
+        summary: "Check event name availability",
+        security: [{ SessionToken: [] }],
+        parameters: [ { name: "eventName", in: "query", required: true, schema: { type: "string" } } ],
+        responses: {
+          "200": {
+            description: "OK",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { message: { type: "string" }, available: { type: "boolean" } } }
+              }
+            }
+          },
+          "400": { description: "eventName is required" }
+        }
+      }
+    },
+
+    "/api/events/{id}/special-rewards": {
+      post: {
+        tags: ["Events"],
+        summary: "Create special reward (leader-only)",
+        security: [{ SessionToken: [] }],
+        parameters: [ { name: "id", in: "path", required: true, schema: { type: "string" } } ],
+        requestBody: {
+          required: true,
+          content: {
+            "multipart/form-data": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  description: { type: "string" },
+                  image: { type: "string" },
+                  file: { type: "string", format: "binary" }
+                },
+                required: ["name"]
+              }
+            },
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  description: { type: "string" },
+                  image: { type: "string" }
+                },
+                required: ["name"]
+              }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Reward created",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    reward: {
+                      type: "object",
+                      properties: {
+                        id: { type: "string" },
+                        eventId: { type: "string" },
+                        name: { type: "string" },
+                        description: { type: "string", nullable: true },
+                        image: { type: "string", nullable: true }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { description: "Reward name is required" },
+          "403": { description: "Forbidden" },
+          "404": { description: "Event not found" }
+        }
+      }
+    },
+
+    "/api/events/{id}/special-rewards/{rewardId}": {
+      put: {
+        tags: ["Events"],
+        summary: "Update special reward (leader-only)",
+        security: [{ SessionToken: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          { name: "rewardId", in: "path", required: true, schema: { type: "string" } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "multipart/form-data": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  description: { type: "string" },
+                  image: { type: "string" },
+                  file: { type: "string", format: "binary" }
+                }
+              }
+            },
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  description: { type: "string" },
+                  image: { type: "string" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Reward updated",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    message: { type: "string" },
+                    reward: {
+                      type: "object",
+                      properties: {
+                        id: { type: "string" },
+                        eventId: { type: "string" },
+                        name: { type: "string" },
+                        description: { type: "string", nullable: true },
+                        image: { type: "string", nullable: true }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": { description: "Forbidden" },
+          "404": { description: "Reward not found" }
+        }
+      },
+      delete: {
+        tags: ["Events"],
+        summary: "Delete special reward (leader-only)",
+        security: [{ SessionToken: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          { name: "rewardId", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": {
+            description: "Reward deleted",
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { message: { type: "string" }, deletedId: { type: "string" } } }
+              }
+            }
+          },
+          "403": { description: "Forbidden" },
+          "404": { description: "Reward not found" }
+        }
       }
     },
   },

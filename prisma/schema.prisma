@@ -111,13 +111,13 @@ model Event {
   publicView             Boolean     @default(true)
   passwordView           String?
   startView              DateTime?   @db.Timestamptz(3)
+  endView                DateTime?   @db.Timestamptz(3)
   maxTeamMembers         Int?
   virtualRewardGuest     Int         @default(0)
   virtualRewardCommittee Int         @default(0)
   unitReward             String?
   maxTeams               Int?
   status                 EventStatus @default(DRAFT)
-  currentStep            Int         @default(1)
   createdAt              DateTime    @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime    @updatedAt @db.Timestamptz(3)
 

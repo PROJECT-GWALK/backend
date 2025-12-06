@@ -4,7 +4,8 @@ import userinfoRoute from './routes/userinfo.js'
 import userManagement from './routes/usermanagement.js'
 import adminDashboard from './routes/admindashboard.js'
 import filesRoute from './routes/files.js'
-import eventRoute from './routes/event/event.js'
+import draftRoute from './routes/event/draft.js'
+import publicRoute from './routes/event/public.js'
 import { swaggerUI } from '@hono/swagger-ui'
 import { openApiDoc } from './swingger/ApiDoc.js'
 
@@ -29,7 +30,8 @@ app.route("/files", filesRoute);
 // USER
 //////////////////////////////////////////////////////////
 app.route("/api/user/@me", userinfoRoute);
-app.route("/api/events", eventRoute)
+app.route("/api/events", publicRoute)
+app.route("/api/events", draftRoute)
 
 
 //////////////////////////////////////////////////////////

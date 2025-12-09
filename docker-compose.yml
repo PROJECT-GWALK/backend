@@ -1,11 +1,11 @@
 name: ${PROJECT_NAME}
 services:
   postgres:
-    image: postgres:17-alpine
+    image: postgres:18.1-alpine
     container_name: ${PROJECT_NAME}-db
     restart: always
     volumes:
-      - project-data:/var/lib/postgresql/data
+      - project-data-v18:/var/lib/postgresql/data
       - ./_entrypoint:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
@@ -38,9 +38,19 @@ services:
     networks:
       - project-net
 
+  clouldflare:
+    image: cloudflare/cloudflared:latest
+    container_name: ${PROJECT_NAME}-cloudflare
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - project-net
+
 volumes:
-  project-data:
-    name: ${PROJECT_NAME}-project-data
+  project-data-v18:
+    name: ${PROJECT_NAME}-project-data-v18
   minio-data:
     name: ${PROJECT_NAME}-minio-data
 networks:

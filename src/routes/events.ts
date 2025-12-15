@@ -93,6 +93,11 @@ eventsRoute.get("/me", async (c) => {
       status: true,
       createdAt: true,
       imageCover: true,
+      startView: true,
+      endView: true,
+      startJoinDate: true,
+      endJoinDate: true,
+      publicView: true,
       participants: { where: { userId: user.id }, select: { eventGroup: true, isLeader: true } },
     },
   });
@@ -102,6 +107,11 @@ eventsRoute.get("/me", async (c) => {
     status: e.status,
     createdAt: e.createdAt,
     imageCover: e.imageCover,
+    startView: e.startView,
+    endView: e.endView,
+    startJoinDate: e.startJoinDate,
+    endJoinDate: e.endJoinDate,
+    publicView: e.publicView,
     role: e.participants?.[0]?.eventGroup || null,
     isLeader: e.participants?.[0]?.isLeader || false,
   }));
@@ -159,6 +169,23 @@ eventsRoute.get("/:id/invite/token", async (c) => {
   const ts = Date.now();
   const token = signInviteToken(eventId, role, ts);
   return c.json({ message: "ok", token });
+});
+
+// Preview invite (no auth required). Returns role if the token/role is valid for this event.
+eventsRoute.get("/:id/invite/preview", async (c) => {
+  const eventId = c.req.param("id");
+  const token = c.req.query("token") || "";
+  const roleParam = c.req.query("role") as keyof typeof roleMap | undefined;
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
+  if (token) {
+    const parsed = verifyInviteToken(token);
+    if (!parsed.valid) return c.json({ message: "invalid token" }, 400);
+    if (parsed.eventId !== eventId) return c.json({ message: "invalid token" }, 400);
+    return c.json({ message: "ok", role: parsed.role });
+  }
+  if (!roleParam || !(roleParam in roleMap)) return c.json({ message: "invalid role" }, 400);
+  return c.json({ message: "ok", role: roleParam });
 });
 
 eventsRoute.post("/:id/invite", async (c) => {

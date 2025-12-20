@@ -175,7 +175,7 @@ model EventFileType {
   eventId         String   @db.Uuid
   name            String
   description     String?
-  allowedFileType FileType?
+  allowedFileTypes FileType[]
   isRequired      Boolean  @default(false)
   createdAt       DateTime @default(now()) @db.Timestamptz(3)
 

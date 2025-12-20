@@ -107,7 +107,11 @@ eventsRoute.get("/:id", async (c) => {
 
   const event = await prisma.event.findUnique({
     where: { id },
-    include: { fileTypes: true, specialRewards: true, participants: { include: { user: true } } },
+    include: {
+      fileTypes: true,
+      specialRewards: true,
+      participants: { include: { user: true, team: { include: { files: true } } } },
+    },
   });
   if (!event) return c.json({ message: "Event not found" }, 404);
 
@@ -162,6 +166,46 @@ eventsRoute.get("/:id/invite/token", async (c) => {
   if (role === "committee") token = linkInvite.committeeToken;
   else if (role === "presenter") token = linkInvite.presenterToken;
   else if (role === "guest") token = linkInvite.guestToken;
+
+  return c.json({ message: "ok", token });
+});
+
+eventsRoute.post("/:id/invite/token/refresh", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const role = c.req.query("role") as keyof typeof roleMap | undefined;
+  if (!role || !(role in roleMap)) return c.json({ message: "invalid role" }, 400);
+
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
+
+  // Check if user is an organizer
+  const organizer = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id, eventGroup: "ORGANIZER" },
+  });
+  if (!organizer) return c.json({ message: "Forbidden" }, 403);
+
+  let linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
+  if (!linkInvite) {
+    linkInvite = await prisma.linkInvite.create({
+      data: { eventId },
+    });
+  }
+
+  // Update token for specific role
+  const updatedLinkInvite = await prisma.linkInvite.update({
+    where: { eventId },
+    data: {
+      committeeToken: role === "committee" ? crypto.randomUUID() : undefined,
+      presenterToken: role === "presenter" ? crypto.randomUUID() : undefined,
+      guestToken: role === "guest" ? crypto.randomUUID() : undefined,
+    },
+  });
+
+  let token = "";
+  if (role === "committee") token = updatedLinkInvite.committeeToken;
+  else if (role === "presenter") token = updatedLinkInvite.presenterToken;
+  else if (role === "guest") token = updatedLinkInvite.guestToken;
 
   return c.json({ message: "ok", token });
 });
@@ -226,6 +270,25 @@ eventsRoute.post("/:id/invite", async (c) => {
 
   if (!targetRole) return c.json({ message: "invalid role" }, 400);
 
+  // Check period based on resolved targetRole
+  if (targetRole === "PRESENTER") {
+    const now = new Date();
+    if (event.startJoinDate && now < event.startJoinDate) {
+      return c.json({ message: "Not in joining period" }, 400);
+    }
+    if (event.endJoinDate && now > event.endJoinDate) {
+      return c.json({ message: "Joining period has ended" }, 400);
+    }
+  } else if (targetRole === "GUEST") {
+    const now = new Date();
+    if (event.startView && now < event.startView) {
+      return c.json({ message: "Not in view period" }, 400);
+    }
+    if (event.endView && now > event.endView) {
+      return c.json({ message: "View period has ended" }, 400);
+    }
+  }
+
   const created = await prisma.eventParticipant.create({
     data: {
       eventId,
@@ -246,7 +309,7 @@ eventsRoute.get("/:id/participants", async (c) => {
   if (!organizer) return c.json({ message: "Forbidden" }, 403);
   const participants = await prisma.eventParticipant.findMany({
     where: { eventId: id },
-    include: { user: true, team: true },
+    include: { user: true, team: { include: { files: true } } },
   });
   return c.json({ message: "ok", participants });
 });
@@ -316,6 +379,87 @@ eventsRoute.delete("/:id/participants/:pid", async (c) => {
   await prisma.eventParticipant.delete({ where: { id: pid } });
   return c.json({ message: "ok" });
 });
+
+eventsRoute.post("/:id/teams", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}));
+  const teamName = body.teamName;
+  const description = body.description;
+
+  if (!teamName || typeof teamName !== "string" || teamName.trim().length < 1) {
+    return c.json({ message: "Team name is required" }, 400);
+  }
+
+  const participant = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id },
+  });
+  if (!participant) return c.json({ message: "Forbidden" }, 403);
+
+  if (participant.teamId) {
+    return c.json({ message: "You are already in a team" }, 400);
+  }
+
+  const team = await prisma.team.create({
+    data: {
+      eventId,
+      teamName: teamName.trim(),
+      description,
+    },
+  });
+
+  await prisma.eventParticipant.update({
+    where: { id: participant.id },
+    data: { teamId: team.id, isLeader: true },
+  });
+
+  return c.json({ message: "ok", team });
+});
+
+eventsRoute.post("/:id/teams/:teamId/files", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const teamId = c.req.param("teamId");
+
+  const participant = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id },
+  });
+  if (!participant || participant.teamId !== teamId) {
+    return c.json({ message: "Forbidden" }, 403);
+  }
+
+  const form = await c.req.parseBody();
+  const fileTypeId = form["fileTypeId"] as string;
+  const file = form["file"] as File | undefined;
+
+  if (!fileTypeId || !file) {
+    return c.json({ message: "Missing file or fileTypeId" }, 400);
+  }
+
+  const fileType = await prisma.eventFileType.findFirst({
+    where: { id: fileTypeId, eventId },
+  });
+  if (!fileType) return c.json({ message: "Invalid file type" }, 400);
+
+  const minio = getMinio();
+  const bucket = process.env.OBJ_BUCKET!;
+  const ext = path.extname(file.name);
+  const objectName = `teams/${teamId}/${fileTypeId}-${Date.now()}${ext}`;
+  const buffer = Buffer.from(await file.arrayBuffer());
+  await minio.putObject(bucket, objectName, buffer);
+  const fileUrl = `/backend/files/${bucket}/${objectName}`;
+
+  const teamFile = await prisma.teamFile.create({
+    data: {
+      teamId,
+      fileTypeId,
+      fileUrl,
+    },
+  });
+
+  return c.json({ message: "ok", teamFile });
+});
+
 eventsRoute.get("/me/drafts", async (c) => {
   const user = c.get("user");
   const drafts = await prisma.event.findMany({
@@ -479,6 +623,56 @@ eventsRoute.put("/:id", async (c) => {
       unitReward: typeof body.unitReward === "string" ? body.unitReward : event.unitReward,
     } as any;
     if ("imageCover" in body) (data as any).imageCover = body.imageCover === "null" ? null : body.imageCover;
+  }
+
+  // Handle fileTypes sync
+  let fileTypesData: any[] | undefined;
+  if (contentType.includes("multipart/form-data")) {
+    const form = await c.req.parseBody();
+    if (typeof form["fileTypes"] === "string") {
+      try {
+        fileTypesData = JSON.parse(form["fileTypes"] as string);
+      } catch (e) {}
+    }
+  } else {
+    const body = await c.req.json().catch(() => ({}));
+    if (Array.isArray(body.fileTypes)) {
+      fileTypesData = body.fileTypes;
+    }
+  }
+
+  if (fileTypesData) {
+    const current = await prisma.eventFileType.findMany({ where: { eventId: id }, select: { id: true } });
+    const currentIds = current.map((c) => c.id);
+    const incomingIds = fileTypesData.filter((f: any) => f.id && currentIds.includes(f.id)).map((f: any) => f.id);
+
+    const toDelete = currentIds.filter((cid) => !incomingIds.includes(cid));
+    const toUpdate = fileTypesData.filter((f: any) => f.id && currentIds.includes(f.id));
+    const toCreate = fileTypesData.filter((f: any) => !f.id || !currentIds.includes(f.id));
+
+    await prisma.$transaction([
+      prisma.eventFileType.deleteMany({ where: { id: { in: toDelete } } }),
+      ...toUpdate.map((f: any) =>
+        prisma.eventFileType.update({
+          where: { id: f.id },
+          data: {
+            name: f.name,
+            description: f.description,
+            allowedFileTypes: f.allowedFileTypes,
+            isRequired: f.isRequired,
+          },
+        })
+      ),
+      prisma.eventFileType.createMany({
+        data: toCreate.map((f: any) => ({
+          eventId: id,
+          name: f.name,
+          description: f.description,
+          allowedFileTypes: f.allowedFileTypes,
+          isRequired: f.isRequired,
+        })),
+      }),
+    ]);
   }
 
   const sv = ("startView" in data ? (data as any).startView : event.startView) as Date | null;

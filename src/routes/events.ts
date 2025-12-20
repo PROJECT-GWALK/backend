@@ -29,23 +29,6 @@ function verifyInvite(eventId: string, userId: string, role: keyof typeof roleMa
   return expected === sig;
 }
 
-function signInviteToken(eventId: string, role: keyof typeof roleMap, ts: number) {
-  const payload = `${eventId}|${role}|${ts}`;
-  const sig = createHmac("sha256", INVITE_SECRET).update(payload).digest("hex");
-  return `${payload}|${sig}`;
-}
-
-function verifyInviteToken(token: string) {
-  const parts = token.split("|");
-  if (parts.length !== 4) return { valid: false as const };
-  const [eventId, role, ts, sig] = parts;
-  const payload = `${eventId}|${role}|${ts}`;
-  const expected = createHmac("sha256", INVITE_SECRET).update(payload).digest("hex");
-  if (expected !== sig) return { valid: false as const };
-  if (!(role in roleMap)) return { valid: false as const };
-  return { valid: true as const, eventId, role: role as keyof typeof roleMap, ts: Number(ts) };
-}
-
 eventsRoute.get("/", async (c) => {
   const user = c.get("user");
   const events = await prisma.event.findMany({
@@ -164,10 +147,22 @@ eventsRoute.get("/:id/invite/token", async (c) => {
   const eventId = c.req.param("id");
   const role = c.req.query("role") as keyof typeof roleMap | undefined;
   if (!role || !(role in roleMap)) return c.json({ message: "invalid role" }, 400);
+  
   const event = await prisma.event.findUnique({ where: { id: eventId } });
   if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
-  const ts = Date.now();
-  const token = signInviteToken(eventId, role, ts);
+  
+  let linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
+  if (!linkInvite) {
+    linkInvite = await prisma.linkInvite.create({
+      data: { eventId },
+    });
+  }
+
+  let token = "";
+  if (role === "committee") token = linkInvite.committeeToken;
+  else if (role === "presenter") token = linkInvite.presenterToken;
+  else if (role === "guest") token = linkInvite.guestToken;
+
   return c.json({ message: "ok", token });
 });
 
@@ -176,14 +171,23 @@ eventsRoute.get("/:id/invite/preview", async (c) => {
   const eventId = c.req.param("id");
   const token = c.req.query("token") || "";
   const roleParam = c.req.query("role") as keyof typeof roleMap | undefined;
+  
   const event = await prisma.event.findUnique({ where: { id: eventId } });
   if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
+  
   if (token) {
-    const parsed = verifyInviteToken(token);
-    if (!parsed.valid) return c.json({ message: "invalid token" }, 400);
-    if (parsed.eventId !== eventId) return c.json({ message: "invalid token" }, 400);
-    return c.json({ message: "ok", role: parsed.role });
+    const linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
+    if (!linkInvite) return c.json({ message: "invalid token" }, 400);
+    
+    let role: keyof typeof roleMap | null = null;
+    if (linkInvite.committeeToken === token) role = "committee";
+    else if (linkInvite.presenterToken === token) role = "presenter";
+    else if (linkInvite.guestToken === token) role = "guest";
+    
+    if (!role) return c.json({ message: "invalid token" }, 400);
+    return c.json({ message: "ok", role: role });
   }
+  
   if (!roleParam || !(roleParam in roleMap)) return c.json({ message: "invalid role" }, 400);
   return c.json({ message: "ok", role: roleParam });
 });
@@ -194,26 +198,39 @@ eventsRoute.post("/:id/invite", async (c) => {
   const token = c.req.query("token") || "";
   let role = c.req.query("role") as keyof typeof roleMap | undefined;
   const sig = c.req.query("sig") || "";
+  
   const event = await prisma.event.findUnique({ where: { id: eventId } });
   if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
+  
   const existing = await prisma.eventParticipant.findFirst({
     where: { eventId, userId: user.id },
   });
   if (existing) return c.json({ message: "Already joined" }, 400);
+
+  let targetRole: "ORGANIZER" | "PRESENTER" | "GUEST" | "COMMITTEE" | undefined;
+
   if (token) {
-    const parsed = verifyInviteToken(token);
-    if (!parsed.valid) return c.json({ message: "invalid token" }, 400);
-    if (parsed.eventId !== eventId) return c.json({ message: "invalid token" }, 400);
-    role = parsed.role;
+    const linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
+    if (!linkInvite) return c.json({ message: "invalid token" }, 400);
+
+    if (linkInvite.committeeToken === token) targetRole = "COMMITTEE";
+    else if (linkInvite.presenterToken === token) targetRole = "PRESENTER";
+    else if (linkInvite.guestToken === token) targetRole = "GUEST";
+    else return c.json({ message: "invalid token" }, 400);
+
   } else {
     if (!role || !(role in roleMap)) return c.json({ message: "invalid role" }, 400);
     if (!verifyInvite(eventId, user.id, role, sig)) return c.json({ message: "invalid signature" }, 400);
+    targetRole = roleMap[role];
   }
+
+  if (!targetRole) return c.json({ message: "invalid role" }, 400);
+
   const created = await prisma.eventParticipant.create({
     data: {
       eventId,
       userId: user.id,
-      eventGroup: roleMap[role],
+      eventGroup: targetRole,
       isLeader: false,
     },
   });
@@ -470,6 +487,8 @@ eventsRoute.put("/:id", async (c) => {
   const sj = ("startJoinDate" in data ? (data as any).startJoinDate : event.startJoinDate) as Date | null;
   const ej = ("endJoinDate" in data ? (data as any).endJoinDate : event.endJoinDate) as Date | null;
   if (sj && ej && sj > ej) return c.json({ message: "Submit period invalid: start after end" }, 400);
+  if (sj && sv && sj >= sv) return c.json({ message: "Submission start must be before event start" }, 400);
+  if (ej && sv && ej >= sv) return c.json({ message: "Submission end must be before event start" }, 400);
 
   const updated = await prisma.event.update({ where: { id }, data });
   return c.json({ message: "ok", event: updated });

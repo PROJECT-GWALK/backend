@@ -11,7 +11,7 @@ const eventsRoute = new Hono<{ Variables: { user: User } }>();
 
 eventsRoute.use("*", authMiddleware);
 
-const INVITE_SECRET = process.env.INVITE_SECRET || "dev-secret";
+const INVITE_SECRET = process.env.INVITE_SECRET || "default-secret";
 const roleMap = {
   presenter: "PRESENTER",
   guest: "GUEST",

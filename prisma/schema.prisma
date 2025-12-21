@@ -155,6 +155,8 @@ model Team {
   eventId     String   @db.Uuid
   teamName    String
   description String?
+  videoLink   String?
+  imageCover  String?
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
 
   event        Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)

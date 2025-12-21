@@ -383,9 +383,25 @@ eventsRoute.delete("/:id/participants/:pid", async (c) => {
 eventsRoute.post("/:id/teams", async (c) => {
   const user = c.get("user");
   const eventId = c.req.param("id");
-  const body = await c.req.json().catch(() => ({}));
-  const teamName = body.teamName;
-  const description = body.description;
+
+  const contentType = c.req.header("content-type") || "";
+  let teamName: string | undefined;
+  let description: string | undefined;
+  let videoLink: string | undefined;
+  let imageCover: string | undefined;
+  let file: File | undefined;
+
+  if (contentType.includes("multipart/form-data")) {
+    const form = await c.req.parseBody();
+    teamName = typeof form["teamName"] === "string" ? form["teamName"] : undefined;
+    description = typeof form["description"] === "string" ? form["description"] : undefined;
+    file = form["imageCover"] instanceof File ? (form["imageCover"] as File) : undefined;
+  } else {
+    const body = await c.req.json().catch(() => ({}));
+    teamName = body.teamName;
+    description = body.description;
+    imageCover = body.imageCover;
+  }
 
   if (!teamName || typeof teamName !== "string" || teamName.trim().length < 1) {
     return c.json({ message: "Team name is required" }, 400);
@@ -400,11 +416,25 @@ eventsRoute.post("/:id/teams", async (c) => {
     return c.json({ message: "You are already in a team" }, 400);
   }
 
+  if (file) {
+    const minio = getMinio();
+    const bucket = process.env.OBJ_BUCKET!;
+    const baseName = path.parse(file.name).name;
+    const objectName = `teams/covers/${eventId}-${Date.now()}-${baseName}.webp`;
+    const buffer = Buffer.from(await file.arrayBuffer());
+    // Optional: resize/convert to webp if sharp is available
+    const webpBuffer = await sharp(buffer).webp().toBuffer();
+    await minio.putObject(bucket, objectName, webpBuffer);
+    imageCover = `/backend/files/${bucket}/${objectName}`;
+  }
+
   const team = await prisma.team.create({
     data: {
       eventId,
       teamName: teamName.trim(),
       description,
+      videoLink,
+      imageCover,
     },
   });
 
@@ -414,6 +444,190 @@ eventsRoute.post("/:id/teams", async (c) => {
   });
 
   return c.json({ message: "ok", team });
+});
+
+eventsRoute.put("/:id/teams/:teamId", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const teamId = c.req.param("teamId");
+  const contentType = c.req.header("content-type") || "";
+  let teamName: string | undefined;
+  let description: string | undefined;
+  let imageCover: string | undefined;
+  let file: File | undefined;
+
+  if (contentType.includes("multipart/form-data")) {
+    const form = await c.req.parseBody();
+    teamName = typeof form["teamName"] === "string" ? form["teamName"] : undefined;
+    description = typeof form["description"] === "string" ? form["description"] : undefined;
+    file = form["imageCover"] instanceof File ? (form["imageCover"] as File) : undefined;
+    // Check if imageCover is sent as string (e.g. "null" or existing url)
+    if (typeof form["imageCover"] === "string") imageCover = form["imageCover"];
+  } else {
+    const body = await c.req.json().catch(() => ({}));
+    teamName = body.teamName;
+    description = body.description;
+    imageCover = body.imageCover;
+  }
+  
+  const participant = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id },
+  });
+  if (!participant || participant.teamId !== teamId) {
+    // Only team members can edit (or maybe just leader? for now let's say any member)
+    // Actually, usually only leader can edit. Let's check isLeader.
+    if (!participant?.isLeader) return c.json({ message: "Forbidden" }, 403);
+  }
+
+  if (file) {
+    const minio = getMinio();
+    const bucket = process.env.OBJ_BUCKET!;
+    const baseName = path.parse(file.name).name;
+    const objectName = `imgCoverTeam/${eventId}-${Date.now()}-${baseName}.webp`;
+    const buffer = Buffer.from(await file.arrayBuffer());
+    // Optional: resize/convert to webp if sharp is available
+    const webpBuffer = await sharp(buffer).webp().toBuffer();
+    await minio.putObject(bucket, objectName, webpBuffer);
+    imageCover = `/backend/files/${bucket}/${objectName}`;
+  }
+
+  const data: any = {};
+  if (typeof teamName === "string" && teamName.trim().length > 0) data.teamName = teamName.trim();
+  if (typeof description === "string") data.description = description;
+  if (typeof imageCover === "string") data.imageCover = imageCover === "null" ? null : imageCover;
+
+  const team = await prisma.team.update({
+    where: { id: teamId },
+    data,
+  });
+
+  return c.json({ message: "ok", team });
+});
+
+eventsRoute.get("/:id/presenters/candidates", async (c) => {
+  const eventId = c.req.param("id");
+  const q = c.req.query("q") || "";
+
+  if (q.length < 2) return c.json({ message: "ok", candidates: [] });
+
+  const candidates = await prisma.eventParticipant.findMany({
+    where: {
+      eventId,
+      eventGroup: "PRESENTER",
+      teamId: null,
+      user: {
+        OR: [
+          { name: { contains: q } }, // Case insensitive usually depends on DB collation, or use mode: 'insensitive' for Postgres
+          { username: { contains: q } },
+        ],
+      },
+    },
+    include: { user: true },
+    take: 10,
+  });
+
+  return c.json({
+    message: "ok",
+    candidates: candidates.map((c) => ({
+      id: c.id,
+      userId: c.userId,
+      name: c.user.name,
+      username: c.user.username,
+      image: c.user.image,
+    })),
+  });
+});
+
+eventsRoute.post("/:id/teams/:teamId/members", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const teamId = c.req.param("teamId");
+  const { userId } = await c.req.json();
+
+  const requester = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id },
+  });
+
+  if (!requester || requester.teamId !== teamId) {
+    return c.json({ message: "Forbidden" }, 403);
+  }
+
+  const target = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: userId },
+  });
+
+  if (!target) return c.json({ message: "User not found in event" }, 404);
+  if (target.teamId) return c.json({ message: "User already in a team" }, 400);
+  if (target.eventGroup !== "PRESENTER") return c.json({ message: "User is not a presenter" }, 400);
+
+  await prisma.eventParticipant.update({
+    where: { id: target.id },
+    data: { teamId },
+  });
+
+  return c.json({ message: "ok" });
+});
+
+eventsRoute.get("/:id/teams/:teamId", async (c) => {
+  const eventId = c.req.param("id");
+  const teamId = c.req.param("teamId");
+
+  const team = await prisma.team.findUnique({
+    where: { id: teamId },
+    include: {
+      participants: { include: { user: true } },
+      files: { include: { fileType: true } },
+    },
+  });
+
+  if (!team || team.eventId !== eventId) {
+    return c.json({ message: "Team not found" }, 404);
+  }
+
+  return c.json({ message: "ok", team });
+});
+
+eventsRoute.delete("/:id/teams/:teamId", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const teamId = c.req.param("teamId");
+
+  const participant = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id },
+  });
+  // Only leader can delete
+  if (!participant || participant.teamId !== teamId || !participant.isLeader) {
+     // Or organizer?
+     const organizer = await prisma.eventParticipant.findFirst({
+        where: { eventId, userId: user.id, eventGroup: "ORGANIZER" },
+     });
+     if (!organizer) return c.json({ message: "Forbidden" }, 403);
+  }
+
+  // Unlink participants first to prevent cascade delete
+  await prisma.eventParticipant.updateMany({
+    where: { teamId },
+    data: { teamId: null, isLeader: false },
+  });
+
+  await prisma.team.delete({
+    where: { id: teamId },
+  });
+
+  return c.json({ message: "ok" });
+});
+
+eventsRoute.get("/:id/teams", async (c) => {
+  const eventId = c.req.param("id");
+  const teams = await prisma.team.findMany({
+    where: { eventId },
+    include: {
+      participants: { include: { user: true } },
+      files: { include: { fileType: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  return c.json({ message: "ok", teams });
 });
 
 eventsRoute.post("/:id/teams/:teamId/files", async (c) => {

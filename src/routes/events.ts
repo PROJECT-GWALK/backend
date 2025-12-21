@@ -416,6 +416,16 @@ eventsRoute.post("/:id/teams", async (c) => {
     return c.json({ message: "You are already in a team" }, 400);
   }
 
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+
+  if (event.maxTeams) {
+    const currentTeams = await prisma.team.count({ where: { eventId } });
+    if (currentTeams >= event.maxTeams) {
+      return c.json({ message: "Max teams reached for this event" }, 400);
+    }
+  }
+
   if (file) {
     const minio = getMinio();
     const bucket = process.env.OBJ_BUCKET!;
@@ -552,6 +562,21 @@ eventsRoute.post("/:id/teams/:teamId/members", async (c) => {
     return c.json({ message: "Forbidden" }, 403);
   }
 
+  // Only leader can add members
+  if (!requester.isLeader) {
+    return c.json({ message: "Only leader can add members" }, 403);
+  }
+
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+
+  if (event.maxTeamMembers) {
+    const currentMembers = await prisma.eventParticipant.count({ where: { teamId } });
+    if (currentMembers >= event.maxTeamMembers) {
+      return c.json({ message: "Max team members reached" }, 400);
+    }
+  }
+
   const target = await prisma.eventParticipant.findFirst({
     where: { eventId, userId: userId },
   });
@@ -645,9 +670,10 @@ eventsRoute.post("/:id/teams/:teamId/files", async (c) => {
   const form = await c.req.parseBody();
   const fileTypeId = form["fileTypeId"] as string;
   const file = form["file"] as File | undefined;
+  const url = form["url"] as string | undefined;
 
-  if (!fileTypeId || !file) {
-    return c.json({ message: "Missing file or fileTypeId" }, 400);
+  if (!fileTypeId || (!file && !url)) {
+    return c.json({ message: "Missing file or url or fileTypeId" }, 400);
   }
 
   const fileType = await prisma.eventFileType.findFirst({
@@ -655,13 +681,30 @@ eventsRoute.post("/:id/teams/:teamId/files", async (c) => {
   });
   if (!fileType) return c.json({ message: "Invalid file type" }, 400);
 
-  const minio = getMinio();
-  const bucket = process.env.OBJ_BUCKET!;
-  const ext = path.extname(file.name);
-  const objectName = `teams/${teamId}/${fileTypeId}-${Date.now()}${ext}`;
-  const buffer = Buffer.from(await file.arrayBuffer());
-  await minio.putObject(bucket, objectName, buffer);
-  const fileUrl = `/backend/files/${bucket}/${objectName}`;
+  // Check if file already exists for this team and fileType
+  const existingFile = await prisma.teamFile.findFirst({
+    where: { teamId, fileTypeId },
+  });
+
+  if (existingFile) {
+    // Delete existing record (MinIO file deletion is optional/deferred, but we remove DB record)
+    await prisma.teamFile.delete({
+      where: { id: existingFile.id },
+    });
+  }
+
+  let fileUrl = "";
+  if (file) {
+    const minio = getMinio();
+    const bucket = process.env.OBJ_BUCKET!;
+    const ext = path.extname(file.name);
+    const objectName = `teams/${teamId}/${fileTypeId}-${Date.now()}${ext}`;
+    const buffer = Buffer.from(await file.arrayBuffer());
+    await minio.putObject(bucket, objectName, buffer);
+    fileUrl = `/backend/files/${bucket}/${objectName}`;
+  } else if (url) {
+    fileUrl = url;
+  }
 
   const teamFile = await prisma.teamFile.create({
     data: {
@@ -672,6 +715,65 @@ eventsRoute.post("/:id/teams/:teamId/files", async (c) => {
   });
 
   return c.json({ message: "ok", teamFile });
+});
+
+eventsRoute.delete("/:id/teams/:teamId/files/:fileTypeId", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const teamId = c.req.param("teamId");
+  const fileTypeId = c.req.param("fileTypeId");
+
+  const participant = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id },
+  });
+  if (!participant || participant.teamId !== teamId) {
+    return c.json({ message: "Forbidden" }, 403);
+  }
+
+  // Allow any team member to delete, matching upload permissions
+  await prisma.teamFile.deleteMany({
+    where: { teamId, fileTypeId },
+  });
+
+  return c.json({ message: "ok" });
+});
+
+eventsRoute.delete("/:id/teams/:teamId/members/:userId", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const teamId = c.req.param("teamId");
+  const targetUserId = c.req.param("userId");
+
+  const requester = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id },
+  });
+
+  if (!requester || requester.teamId !== teamId) {
+    return c.json({ message: "Forbidden" }, 403);
+  }
+
+  if (!requester.isLeader) {
+    return c.json({ message: "Only leader can remove members" }, 403);
+  }
+
+  const target = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: targetUserId },
+  });
+
+  if (!target || target.teamId !== teamId) {
+    return c.json({ message: "User not in this team" }, 404);
+  }
+
+  if (target.isLeader) {
+     return c.json({ message: "Cannot remove leader" }, 400);
+  }
+
+  await prisma.eventParticipant.update({
+    where: { id: target.id },
+    data: { teamId: null },
+  });
+
+  return c.json({ message: "ok" });
 });
 
 eventsRoute.get("/me/drafts", async (c) => {

@@ -120,16 +120,136 @@ eventsRoute.get("/:id", async (c) => {
       where: { eventId: id, userId: user.id, eventGroup: "ORGANIZER" },
     });
     if (!organizer) return c.json({ message: "Forbidden" }, 403);
-    return c.json({ message: "ok", event });
+  } else if (!event.publicView) {
+    const participant = await prisma.eventParticipant.findFirst({
+      where: { eventId: id, userId: user.id },
+    });
+    if (!participant) return c.json({ message: "Forbidden" }, 403);
   }
 
-  if (event.publicView) return c.json({ message: "ok", event });
-
-  const participant = await prisma.eventParticipant.findFirst({
-    where: { eventId: id, userId: user.id },
+  // Calculate Dashboard Stats
+  const participants = event.participants;
+  const userRoleMap = new Map<string, string>();
+  participants.forEach((p) => {
+    if (p.eventGroup) userRoleMap.set(p.userId, p.eventGroup);
   });
-  if (!participant) return c.json({ message: "Forbidden" }, 403);
-  return c.json({ message: "ok", event });
+
+  const presentersCount = participants.filter((p) => p.eventGroup === "PRESENTER").length;
+  const guestsCount = participants.filter((p) => p.eventGroup === "GUEST").length;
+  const committeeCount = participants.filter((p) => p.eventGroup === "COMMITTEE").length;
+
+  // Virtual Rewards (Budget)
+  const participantsVirtualTotal = participants
+    .filter((p) => p.eventGroup === "GUEST")
+    .reduce((acc, p) => acc + p.virtualReward, 0);
+
+  const committeeVirtualTotal = participants
+    .filter((p) => p.eventGroup === "COMMITTEE")
+    .reduce((acc, p) => acc + p.virtualReward, 0);
+
+  const vrTotal = participants.reduce((acc, p) => acc + p.virtualReward, 0);
+
+  // Virtual Rewards (Used)
+  const rewardsAgg = await prisma.teamReward.groupBy({
+    by: ["giverId"],
+    where: { eventId: id },
+    _sum: { reward: true },
+  });
+
+  let participantsVirtualUsed = 0;
+  let committeeVirtualUsed = 0;
+  let vrUsed = 0;
+  let myVirtualUsed = 0;
+
+  rewardsAgg.forEach((r) => {
+    const amount = r._sum.reward || 0;
+    vrUsed += amount;
+    const role = userRoleMap.get(r.giverId);
+    if (role === "GUEST") participantsVirtualUsed += amount;
+    if (role === "COMMITTEE") committeeVirtualUsed += amount;
+    if (r.giverId === user.id) myVirtualUsed = amount;
+  });
+
+  // Comments / Opinions
+  const commentsAgg = await prisma.comment.groupBy({
+    by: ["userId"],
+    where: { eventId: id },
+    _count: true,
+  });
+
+  let opinionsGot = 0;
+  let opinionsPresenter = 0;
+  let opinionsGuest = 0;
+  let opinionsCommittee = 0;
+
+  commentsAgg.forEach((c) => {
+    const count = c._count;
+    opinionsGot += count;
+    const role = userRoleMap.get(c.userId);
+    if (role === "PRESENTER") opinionsPresenter += count;
+    if (role === "GUEST") opinionsGuest += count;
+    if (role === "COMMITTEE") opinionsCommittee += count;
+  });
+
+  // Committee Feedback
+  const committeeFeedbackCount = await prisma.committeeFeedback.count({
+    where: { eventId: id },
+  });
+  
+  // Special Rewards
+  const specialPrizeCount = event.specialRewards.length;
+  const specialVotes = await prisma.specialRewardVote.findMany({
+    where: { reward: { eventId: id } },
+    select: { rewardId: true },
+  });
+  const specialPrizeUsed = specialVotes.length; // Total votes cast
+
+  // Unused Awards (0 votes)
+  const votedRewardIds = new Set(specialVotes.map((v) => v.rewardId));
+  const awardsUnused = event.specialRewards
+    .filter((r) => !votedRewardIds.has(r.id))
+    .map((r) => r.name);
+
+  const presenterTeams = await prisma.team.count({ where: { eventId: id } });
+
+  // User Specific Stats
+  const myParticipant = participants.find((p) => p.userId === user.id);
+  const myVirtualTotal = myParticipant?.virtualReward || 0;
+  let myFeedbackCount = 0;
+
+  if (myParticipant && myParticipant.eventGroup === "COMMITTEE") {
+    myFeedbackCount = await prisma.committeeFeedback.count({
+      where: { eventId: id, committeeId: myParticipant.id },
+    });
+  }
+
+  const enhancedEvent = {
+    ...event,
+    presentersCount,
+    guestsCount,
+    committeeCount,
+    participantsVirtualTotal,
+    participantsVirtualUsed,
+    participantsCommentCount: opinionsGuest,
+    committeeVirtualTotal,
+    committeeVirtualUsed,
+    committeeFeedbackCount,
+    opinionsGot,
+    opinionsPresenter,
+    opinionsGuest,
+    opinionsCommittee,
+    vrTotal,
+    vrUsed,
+    specialPrizeCount,
+    specialPrizeUsed,
+    awardsUnused,
+    presenterTeams,
+    myVirtualTotal,
+    myVirtualUsed,
+    myFeedbackCount,
+  };
+
+  return c.json({ message: "ok", event: enhancedEvent });
 });
 
 eventsRoute.get("/:id/invite/sign", async (c) => {
@@ -282,11 +402,21 @@ eventsRoute.post("/:id/invite", async (c) => {
   } else if (targetRole === "GUEST") {
     const now = new Date();
     if (event.startView && now < event.startView) {
-      return c.json({ message: "Not in view period" }, 400);
+      // Allow if in viewSoon (after endJoinDate but before startView)
+      if (!event.endJoinDate || now <= event.endJoinDate) {
+        return c.json({ message: "Not in view period" }, 400);
+      }
     }
     if (event.endView && now > event.endView) {
       return c.json({ message: "View period has ended" }, 400);
     }
+  }
+
+  let virtualReward = 0;
+  if (targetRole === "COMMITTEE") {
+    virtualReward = event.virtualRewardCommittee ?? 0;
+  } else if (targetRole === "GUEST") {
+    virtualReward = event.virtualRewardGuest ?? 0;
   }
 
   const created = await prisma.eventParticipant.create({
@@ -295,6 +425,7 @@ eventsRoute.post("/:id/invite", async (c) => {
       userId: user.id,
       eventGroup: targetRole,
       isLeader: false,
+      virtualReward,
     },
   });
   return c.json({ message: "ok", participant: created });
@@ -330,7 +461,21 @@ eventsRoute.put("/:id/participants/:pid", async (c) => {
     teamId?: string | null;
   } = {};
   const eg = body?.eventGroup;
-  if (eg && ["ORGANIZER", "PRESENTER", "COMMITTEE", "GUEST"].includes(eg)) data.eventGroup = eg;
+  if (eg && ["ORGANIZER", "PRESENTER", "COMMITTEE", "GUEST"].includes(eg)) {
+    data.eventGroup = eg;
+    
+    // Auto-update virtual reward based on role
+    const event = await prisma.event.findUnique({ where: { id } });
+    if (event) {
+      if (eg === "ORGANIZER" || eg === "PRESENTER") {
+        data.virtualReward = 0;
+      } else if (eg === "COMMITTEE") {
+        data.virtualReward = event.virtualRewardCommittee ?? 0;
+      } else if (eg === "GUEST") {
+        data.virtualReward = event.virtualRewardGuest ?? 0;
+      }
+    }
+  }
   if (typeof body?.isLeader === "boolean") data.isLeader = body.isLeader;
   if (typeof body?.virtualReward === "number") data.virtualReward = Math.max(0, body.virtualReward);
   if (body?.teamId === null) data.teamId = null;
@@ -350,6 +495,27 @@ eventsRoute.put("/:id/participants/:pid", async (c) => {
   } else {
     if (!organizer.isLeader && body?.eventGroup === "ORGANIZER") {
       return c.json({ message: "Only organizer leader can assign organizer role" }, 403);
+    }
+    // Handle leaving Presenter role with team logic
+    if (
+      existing.eventGroup === "PRESENTER" &&
+      data.eventGroup &&
+      data.eventGroup !== "PRESENTER" &&
+      existing.teamId
+    ) {
+      if (existing.isLeader) {
+        // Leader leaving: Delete team and remove all members from it
+        await prisma.eventParticipant.updateMany({
+          where: { teamId: existing.teamId },
+          data: { teamId: null, isLeader: false },
+        });
+        await prisma.team.delete({ where: { id: existing.teamId } });
+        data.teamId = null;
+        data.isLeader = false;
+      } else {
+        // Member leaving: Just remove from team
+        data.teamId = null;
+      }
     }
   }
   const updated = await prisma.eventParticipant.update({
@@ -570,8 +736,10 @@ eventsRoute.post("/:id/teams/:teamId/members", async (c) => {
   const event = await prisma.event.findUnique({ where: { id: eventId } });
   if (!event) return c.json({ message: "Event not found" }, 404);
 
-  if (event.maxTeamMembers) {
-    const currentMembers = await prisma.eventParticipant.count({ where: { teamId } });
+  if (event.maxTeamMembers !== null && event.maxTeamMembers !== undefined) {
+    const currentMembers = await prisma.eventParticipant.count({
+      where: { teamId },
+    });
     if (currentMembers >= event.maxTeamMembers) {
       return c.json({ message: "Max team members reached" }, 400);
     }
@@ -752,8 +920,8 @@ eventsRoute.delete("/:id/teams/:teamId/members/:userId", async (c) => {
     return c.json({ message: "Forbidden" }, 403);
   }
 
-  if (!requester.isLeader) {
-    return c.json({ message: "Only leader can remove members" }, 403);
+  if (!requester.isLeader && user.id !== targetUserId) {
+    return c.json({ message: "Only leader can remove other members" }, 403);
   }
 
   const target = await prisma.eventParticipant.findFirst({
@@ -1001,6 +1169,21 @@ eventsRoute.put("/:id", async (c) => {
   if (ej && sv && ej >= sv) return c.json({ message: "Submission end must be before event start" }, 400);
 
   const updated = await prisma.event.update({ where: { id }, data });
+
+  // Update existing participants if rewards changed
+  if (typeof data.virtualRewardGuest === "number") {
+    await prisma.eventParticipant.updateMany({
+      where: { eventId: id, eventGroup: "GUEST" },
+      data: { virtualReward: data.virtualRewardGuest },
+    });
+  }
+  if (typeof data.virtualRewardCommittee === "number") {
+    await prisma.eventParticipant.updateMany({
+      where: { eventId: id, eventGroup: "COMMITTEE" },
+      data: { virtualReward: data.virtualRewardCommittee },
+    });
+  }
+
   return c.json({ message: "ok", event: updated });
 });
 

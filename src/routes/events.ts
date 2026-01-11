@@ -1,15 +1,28 @@
 import { Hono } from "hono";
-import { authMiddleware } from "../middlewares/auth.js";
+import { authMiddleware, optionalAuthMiddleware } from "../middlewares/auth.js";
 import type { User } from "@prisma/client";
 import { getMinio } from "../lib/minio.js";
 import { prisma } from "../lib/prisma.js";
 import { createHmac } from "crypto";
 import sharp from "sharp";
 import path from "node:path";
+import eventsActionRoute from "./eventsAction.js";
 
-const eventsRoute = new Hono<{ Variables: { user: User } }>();
+const eventsRoute = new Hono<{ Variables: { user: User | null } }>();
 
-eventsRoute.use("*", authMiddleware);
+eventsRoute.route("/:eventId/action", eventsActionRoute);
+
+eventsRoute.use("*", async (c, next) => {
+  const path = c.req.path;
+  const method = c.req.method;
+  
+  // Allow optional auth for GET /api/events/:id (UUID)
+  if (method === "GET" && /\/api\/events\/[0-9a-fA-F-]{36}$/.test(path)) {
+    return optionalAuthMiddleware(c, next);
+  }
+  
+  return authMiddleware(c as any, next);
+});
 
 const INVITE_SECRET = process.env.INVITE_SECRET || "default-secret";
 const roleMap = {
@@ -101,6 +114,126 @@ eventsRoute.get("/me", async (c) => {
   return c.json({ message: "ok", events: payload });
 });
 
+eventsRoute.get("/me/history", async (c) => {
+  const user = c.get("user");
+  const now = new Date();
+
+  // 1. Participated (Presenter, Guest, Committee)
+  const participated = await prisma.eventParticipant.findMany({
+    where: {
+      userId: user.id,
+      eventGroup: { not: "ORGANIZER" },
+      event: {
+        status: "PUBLISHED",
+      },
+    },
+    include: {
+      event: true,
+      team: {
+        include: {
+          rankings: true,
+        },
+      },
+    },
+    orderBy: {
+      event: { createdAt: "desc" },
+    },
+  });
+
+  const participatedData = await Promise.all(
+    participated.map(async (p) => {
+      const eventId = p.eventId;
+      const teamId = p.teamId;
+      const isFinished = p.event.endView ? p.event.endView < now : false;
+
+      if (!isFinished) return null;
+
+      // Calculate Special Rewards won by this team
+      let specialRewardsWon: string[] = [];
+      if (teamId) {
+        const rewards = await prisma.specialReward.findMany({
+          where: { eventId },
+          include: { votes: true },
+        });
+
+        for (const r of rewards) {
+          const voteCounts: Record<string, number> = {};
+          r.votes.forEach((v) => {
+            voteCounts[v.teamId] = (voteCounts[v.teamId] || 0) + 1;
+          });
+
+          let maxVotes = 0;
+          let winnerTeamId = null;
+          for (const [tid, count] of Object.entries(voteCounts)) {
+            if (count > maxVotes) {
+              maxVotes = count;
+              winnerTeamId = tid;
+            }
+          }
+
+          if (winnerTeamId === teamId && maxVotes > 0) {
+            specialRewardsWon.push(r.name);
+          }
+        }
+      }
+
+      const rank = p.team?.rankings.find((r) => r.eventId === eventId)?.rank;
+
+      return {
+        eventName: p.event.eventName,
+        teamName: p.team?.teamName || "-",
+        place: rank ? rank.toString() : "-",
+        specialReward: specialRewardsWon.length > 0 ? specialRewardsWon.join(", ") : "-",
+      };
+    })
+  );
+
+  // 2. Organized
+  const organized = await prisma.eventParticipant.findMany({
+    where: {
+      userId: user.id,
+      eventGroup: "ORGANIZER",
+      event: {
+        status: "PUBLISHED",
+      },
+    },
+    include: {
+      event: {
+        include: {
+          ratings: true,
+        },
+      },
+    },
+    orderBy: {
+      event: { createdAt: "desc" },
+    },
+  });
+
+  const organizedData = organized
+    .map((p) => {
+      const isFinished = p.event.endView ? p.event.endView < now : false;
+      if (!isFinished) return null;
+
+      const ratings = p.event.ratings;
+      const avgRating =
+        ratings.length > 0
+          ? (ratings.reduce((a, b) => a + b.rating, 0) / ratings.length).toFixed(1)
+          : "-";
+
+      return {
+        eventName: p.event.eventName,
+        rating: avgRating,
+      };
+    })
+    .filter((e) => e !== null);
+
+  return c.json({
+    message: "ok",
+    participated: participatedData.filter((e) => e !== null),
+    organized: organizedData,
+  });
+});
+
 eventsRoute.get("/:id", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
@@ -115,17 +248,23 @@ eventsRoute.get("/:id", async (c) => {
   });
   if (!event) return c.json({ message: "Event not found" }, 404);
 
+  // For DRAFT events, only organizers can view
   if (event.status === "DRAFT") {
+    if (!user) return c.json({ message: "Forbidden" }, 403);
     const organizer = await prisma.eventParticipant.findFirst({
       where: { eventId: id, userId: user.id, eventGroup: "ORGANIZER" },
     });
     if (!organizer) return c.json({ message: "Forbidden" }, 403);
-  } else if (!event.publicView) {
+  } 
+  // For non-public events, only participants can view
+  else if (!event.publicView) {
+    if (!user) return c.json({ message: "Forbidden" }, 403);
     const participant = await prisma.eventParticipant.findFirst({
       where: { eventId: id, userId: user.id },
     });
     if (!participant) return c.json({ message: "Forbidden" }, 403);
   }
+  // Otherwise, it's a PUBLISHED public event - allow everyone (including unauthenticated)
 
   // Calculate Dashboard Stats
   const participants = event.participants;
@@ -167,7 +306,7 @@ eventsRoute.get("/:id", async (c) => {
     const role = userRoleMap.get(r.giverId);
     if (role === "GUEST") participantsVirtualUsed += amount;
     if (role === "COMMITTEE") committeeVirtualUsed += amount;
-    if (r.giverId === user.id) myVirtualUsed = amount;
+    if (user && r.giverId === user.id) myVirtualUsed = amount;
   });
 
   // Comments / Opinions
@@ -213,7 +352,7 @@ eventsRoute.get("/:id", async (c) => {
   const presenterTeams = await prisma.team.count({ where: { eventId: id } });
 
   // User Specific Stats
-  const myParticipant = participants.find((p) => p.userId === user.id);
+  const myParticipant = user ? participants.find((p) => p.userId === user.id) : null;
   const myVirtualTotal = myParticipant?.virtualReward || 0;
   let myFeedbackCount = 0;
 
@@ -820,7 +959,36 @@ eventsRoute.get("/:id/teams", async (c) => {
     },
     orderBy: { createdAt: "desc" },
   });
-  return c.json({ message: "ok", teams });
+
+  const rewards = await prisma.teamReward.groupBy({
+    by: ["teamId"],
+    where: { eventId },
+    _sum: { reward: true },
+  });
+
+  const rewardMap = new Map<string, number>();
+  rewards.forEach((r) => {
+    rewardMap.set(r.teamId, r._sum.reward || 0);
+  });
+
+  const user = c.get("user");
+  const myRewardsMap = new Map<string, number>();
+  if (user) {
+    const myRewards = await prisma.teamReward.findMany({
+      where: { eventId, giverId: user.id },
+    });
+    myRewards.forEach((r) => {
+      myRewardsMap.set(r.teamId, r.reward);
+    });
+  }
+
+  const teamsWithVr = teams.map((t) => ({
+    ...t,
+    totalVr: rewardMap.get(t.id) || 0,
+    myReward: myRewardsMap.get(t.id) || 0,
+  }));
+
+  return c.json({ message: "ok", teams: teamsWithVr });
 });
 
 eventsRoute.post("/:id/teams/:teamId/files", async (c) => {

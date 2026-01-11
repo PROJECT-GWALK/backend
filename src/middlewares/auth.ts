@@ -22,3 +22,27 @@ export async function authMiddleware(c: Context<{ Variables: { user: User } }>, 
   c.set("user", session.user);
   await next();
 }
+
+export async function optionalAuthMiddleware(c: Context<{ Variables: { user: User | null } }>, next: Next) {
+  let token = getCookie(c, "authjs.session-token");
+
+  if (!token) token = getCookie(c, "__Secure-authjs.session-token");
+
+  if (!token) {
+    c.set("user", null);
+    return next();
+  }
+
+  const session = await prisma.session.findUnique({
+    where: { sessionToken: token },
+    include: { user: true },
+  });
+
+  if (!session || session.expires < new Date()) {
+    c.set("user", null);
+    return next();
+  }
+
+  c.set("user", session.user);
+  await next();
+}

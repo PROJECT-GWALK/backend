@@ -391,6 +391,100 @@ eventsRoute.get("/:id", async (c) => {
   return c.json({ message: "ok", event: enhancedEvent });
 });
 
+eventsRoute.get("/:id/rankings", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    include: {
+      specialRewards: {
+        include: {
+          votes: true,
+        },
+      },
+    },
+  });
+
+  if (!event) return c.json({ message: "Event not found" }, 404);
+  if (event.status !== "PUBLISHED") return c.json({ message: "Event not published" }, 403);
+
+  // Check permission
+  let canView = event.publicView;
+  if (!canView && user) {
+    const p = await prisma.eventParticipant.findFirst({
+      where: { eventId, userId: user.id },
+    });
+    if (p) canView = true;
+  }
+  if (!canView) return c.json({ message: "Forbidden" }, 403);
+
+  // Fetch Teams & Calculate VR Scores
+  const teams = await prisma.team.findMany({
+    where: { eventId },
+    include: {
+      rewards: true,
+    },
+  });
+
+  const teamScores = teams.map((team) => {
+    const totalReward = team.rewards.reduce((sum, r) => sum + r.reward, 0);
+    return {
+      id: team.id,
+      name: team.teamName,
+      totalReward,
+      imageCover: team.imageCover,
+    };
+  });
+
+  // Sort by Total Reward (Desc)
+  teamScores.sort((a, b) => b.totalReward - a.totalReward);
+
+  // Assign Rank
+  const rankings = teamScores.map((t, index) => ({
+    ...t,
+    rank: index + 1,
+  }));
+
+  // Special Rewards Winners
+  const specialRewards = event.specialRewards.map((reward) => {
+    const voteCounts: Record<string, number> = {};
+    reward.votes.forEach((v) => {
+      voteCounts[v.teamId] = (voteCounts[v.teamId] || 0) + 1;
+    });
+
+    let maxVotes = 0;
+    let winnerTeamId: string | null = null;
+
+    Object.entries(voteCounts).forEach(([teamId, count]) => {
+      if (count > maxVotes) {
+        maxVotes = count;
+        winnerTeamId = teamId;
+      }
+    });
+
+    const winnerTeam = winnerTeamId ? teams.find((t) => t.id === winnerTeamId) : null;
+
+    return {
+      id: reward.id,
+      name: reward.name,
+      winner: winnerTeam
+        ? {
+            id: winnerTeam.id,
+            name: winnerTeam.teamName,
+            votes: maxVotes,
+          }
+        : null,
+    };
+  });
+
+  return c.json({
+    message: "ok",
+    rankings,
+    specialRewards,
+  });
+});
+
 eventsRoute.get("/:id/invite/sign", async (c) => {
   const user = c.get("user");
   const eventId = c.req.param("id");

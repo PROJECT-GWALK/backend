@@ -337,19 +337,12 @@ eventsRoute.get("/:id", async (c) => {
   
   // Special Rewards
   const specialPrizeCount = event.specialRewards.length;
-  const specialVotes = await prisma.specialRewardVote.findMany({
+  
+  // Count total votes for stats (regardless of who voted)
+  const totalSpecialVotes = await prisma.specialRewardVote.count({
     where: { reward: { eventId: id } },
-    select: { rewardId: true },
   });
-  const specialPrizeUsed = specialVotes.length; // Total votes cast
-
-  // Unused Awards (0 votes)
-  const votedRewardIds = new Set(specialVotes.map((v) => v.rewardId));
-  const awardsUnused = event.specialRewards
-    .filter((r) => !votedRewardIds.has(r.id))
-    .map((r) => r.name);
-
-  const presenterTeams = await prisma.team.count({ where: { eventId: id } });
+  const specialPrizeUsed = totalSpecialVotes; 
 
   // User Specific Stats
   const myParticipant = user ? participants.find((p) => p.userId === user.id) : null;
@@ -361,6 +354,37 @@ eventsRoute.get("/:id", async (c) => {
       where: { eventId: id, committeeId: myParticipant.id },
     });
   }
+
+  // Unused Awards (for the current user)
+  let awardsUnused: typeof event.specialRewards = [];
+  if (user) {
+    const myVotes = await prisma.specialRewardVote.findMany({
+      where: { 
+        reward: { eventId: id },
+        committeeId: myParticipant?.id 
+      },
+      select: { rewardId: true },
+    });
+    
+    if (myParticipant) {
+       // Re-fetch votes using the participant ID
+       const myRealVotes = await prisma.specialRewardVote.findMany({
+         where: {
+            committeeId: myParticipant.id
+         },
+         select: { rewardId: true }
+       });
+       const myVotedRewardIds = new Set(myRealVotes.map((v) => v.rewardId));
+       awardsUnused = event.specialRewards
+        .filter((r) => !myVotedRewardIds.has(r.id));
+    } else {
+       awardsUnused = event.specialRewards;
+    }
+  } else {
+     awardsUnused = event.specialRewards;
+  }
+
+  const presenterTeams = await prisma.team.count({ where: { eventId: id } });
 
   const enhancedEvent = {
     ...event,
@@ -1067,6 +1091,8 @@ eventsRoute.get("/:id/teams", async (c) => {
 
   const user = c.get("user");
   const myRewardsMap = new Map<string, number>();
+  const mySpecialRewardsMap = new Map<string, string>();
+
   if (user) {
     const myRewards = await prisma.teamReward.findMany({
       where: { eventId, giverId: user.id },
@@ -1074,12 +1100,29 @@ eventsRoute.get("/:id/teams", async (c) => {
     myRewards.forEach((r) => {
       myRewardsMap.set(r.teamId, r.reward);
     });
+
+    const myParticipant = await prisma.eventParticipant.findFirst({
+        where: { eventId, userId: user.id, eventGroup: "COMMITTEE" }
+    });
+
+    if (myParticipant) {
+        const myVotes = await prisma.specialRewardVote.findMany({
+            where: { committeeId: myParticipant.id },
+            include: { reward: true }
+        });
+        myVotes.forEach(v => {
+            if (v.teamId) {
+                mySpecialRewardsMap.set(v.teamId, v.reward.name);
+            }
+        });
+    }
   }
 
   const teamsWithVr = teams.map((t) => ({
     ...t,
     totalVr: rewardMap.get(t.id) || 0,
     myReward: myRewardsMap.get(t.id) || 0,
+    mySpecialReward: mySpecialRewardsMap.get(t.id) || null,
   }));
 
   return c.json({ message: "ok", teams: teamsWithVr });

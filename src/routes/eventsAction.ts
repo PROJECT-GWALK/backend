@@ -185,4 +185,97 @@ eventsActionRoute.post("/reset-vr", async (c) => {
   }
 });
 
+// Give Special Reward
+eventsActionRoute.put("/give-special", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("eventId");
+  const { projectId, rewardId } = await c.req.json();
+
+  if (!eventId || !projectId || !rewardId) {
+    return c.json({ message: "Invalid input" }, 400);
+  }
+
+  const participant = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId: eventId,
+      userId: user.id,
+      eventGroup: "COMMITTEE",
+    },
+  });
+
+  if (!participant) {
+    return c.json({ message: "You are not a committee member in this event" }, 403);
+  }
+
+  const team = await prisma.team.findFirst({
+    where: { id: projectId, eventId: eventId },
+  });
+  if (!team) return c.json({ message: "Team not found" }, 404);
+
+  const reward = await prisma.specialReward.findFirst({
+    where: { id: rewardId, eventId: eventId },
+  });
+  if (!reward) return c.json({ message: "Reward not found" }, 404);
+
+  try {
+    await prisma.specialRewardVote.upsert({
+      where: {
+        rewardId_committeeId: {
+          rewardId: rewardId,
+          committeeId: participant.id,
+        },
+      },
+      update: {
+        teamId: projectId,
+      },
+      create: {
+        rewardId: rewardId,
+        committeeId: participant.id,
+        teamId: projectId,
+      },
+    });
+    return c.json({ message: "Special reward given successfully" });
+  } catch (error) {
+    console.error("Error giving special reward:", error);
+    return c.json({ message: "Internal server error" }, 500);
+  }
+});
+
+// Reset Special Reward (Remove all special rewards given to this team by this user)
+eventsActionRoute.post("/reset-special", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("eventId");
+  const { projectId } = await c.req.json();
+
+  if (!eventId || !projectId) {
+    return c.json({ message: "Invalid input" }, 400);
+  }
+
+  const participant = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId: eventId,
+      userId: user.id,
+      eventGroup: "COMMITTEE",
+    },
+  });
+
+  if (!participant) {
+    return c.json({ message: "You are not a committee member in this event" }, 403);
+  }
+
+  try {
+    await prisma.specialRewardVote.deleteMany({
+      where: {
+        committeeId: participant.id,
+        teamId: projectId,
+      },
+    });
+
+    return c.json({ message: "Special reward reset successfully" });
+  } catch (error) {
+    console.error("Error resetting special reward:", error);
+    return c.json({ message: "Internal server error" }, 500);
+  }
+});
+
 export default eventsActionRoute;

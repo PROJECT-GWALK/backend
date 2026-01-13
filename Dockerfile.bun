@@ -1,0 +1,21 @@
+# Bun
+FROM oven/bun:1.3
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY package.json ./
+
+RUN bun install
+
+COPY . .
+
+# Generate Prisma Client
+RUN bunx prisma generate
+
+# Expose port
+EXPOSE 3001
+
+# Start command
+CMD ["bun", "src/index.ts"]

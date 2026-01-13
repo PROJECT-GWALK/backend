@@ -1,0 +1,27 @@
+# Node.js
+FROM node:20-alpine
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+COPY package.json ./
+
+RUN npm install
+
+COPY . .
+
+# Generate Prisma Client
+RUN npx prisma generate
+
+# Build the application
+RUN npm run build
+
+# Expose port
+EXPOSE 3001
+
+# Debug: List dist folder to confirm build success
+RUN ls -R dist
+
+# Start command
+CMD ["npm", "run", "start"]

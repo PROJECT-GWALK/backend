@@ -496,6 +496,7 @@ eventsRoute.get("/:id/rankings", async (c) => {
     return {
       id: reward.id,
       name: reward.name,
+      image: reward.image,
       winner: winnerTeam
         ? {
             id: winnerTeam.id,
@@ -1026,19 +1027,24 @@ eventsRoute.get("/:id/teams/:teamId", async (c) => {
   const eventId = c.req.param("id");
   const teamId = c.req.param("teamId");
 
-  const team = await prisma.team.findUnique({
-    where: { id: teamId },
-    include: {
-      participants: { include: { user: true } },
-      files: { include: { fileType: true } },
-    },
-  });
+  try {
+    const team = await prisma.team.findUnique({
+      where: { id: teamId },
+      include: {
+        participants: { include: { user: true } },
+        files: { include: { fileType: true } },
+      },
+    });
 
-  if (!team || team.eventId !== eventId) {
-    return c.json({ message: "Team not found" }, 404);
+    if (!team || team.eventId !== eventId) {
+      return c.json({ message: "Team not found" }, 404);
+    }
+
+    return c.json({ message: "ok", team });
+  } catch (error) {
+    console.error("Error fetching team:", error);
+    return c.json({ message: "Team not found or invalid ID" }, 404);
   }
-
-  return c.json({ message: "ok", team });
 });
 
 eventsRoute.delete("/:id/teams/:teamId", async (c) => {

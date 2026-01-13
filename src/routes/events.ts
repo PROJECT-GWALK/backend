@@ -374,9 +374,13 @@ eventsRoute.get("/:id", async (c) => {
          },
          select: { rewardId: true }
        });
-       const myVotedRewardIds = new Set(myRealVotes.map((v) => v.rewardId));
-       awardsUnused = event.specialRewards
-        .filter((r) => !myVotedRewardIds.has(r.id));
+       
+       // If the user has voted for ANY reward, they have used their quota (1 vote per person)
+       if (myRealVotes.length > 0) {
+          awardsUnused = [];
+       } else {
+          awardsUnused = event.specialRewards;
+       }
     } else {
        awardsUnused = event.specialRewards;
     }

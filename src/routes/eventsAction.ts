@@ -217,6 +217,17 @@ eventsActionRoute.put("/give-special", async (c) => {
   });
   if (!reward) return c.json({ message: "Reward not found" }, 404);
 
+  // Check if user already voted for ANY reward (1 Vote per Committee Member Limit)
+  const existingVote = await prisma.specialRewardVote.findFirst({
+    where: {
+      committeeId: participant.id,
+    },
+  });
+
+  if (existingVote && existingVote.rewardId !== rewardId) {
+    return c.json({ message: "You have already used your special vote. Please reset your previous vote first." }, 400);
+  }
+
   try {
     await prisma.specialRewardVote.upsert({
       where: {

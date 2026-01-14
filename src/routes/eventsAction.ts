@@ -46,26 +46,33 @@ eventsActionRoute.put("/give-vr", async (c) => {
   // 3. Transaction
   try {
     const result = await prisma.$transaction(async (tx) => {
-      // Calculate total used so far (excluding current project if updating)
-      const allRewards = await tx.teamReward.findMany({
+      // Check total usage against limit
+      const otherRewards = await tx.teamReward.aggregate({
         where: {
           eventId: eventId,
           giverId: user.id,
+          teamId: { not: projectId },
+        },
+        _sum: {
+          reward: true,
         },
       });
 
-      const currentTotalUsed = allRewards.reduce((sum, r) => sum + r.reward, 0);
-      
-      // Find existing reward for this project
-      const existingReward = allRewards.find(r => r.teamId === projectId);
-      const oldAmount = existingReward ? existingReward.reward : 0;
-      
-      // Calculate projected usage
-      const projectedUsed = currentTotalUsed - oldAmount + amount;
+      const totalUsedOthers = otherRewards._sum.reward || 0;
+      const newTotalUsed = totalUsedOthers + amount;
 
-      if (projectedUsed > participant.virtualReward) {
+      if (newTotalUsed > participant.virtualReward) {
         throw new Error("Insufficient VR balance");
       }
+
+      // Find existing reward for this team
+      const existingReward = await tx.teamReward.findFirst({
+        where: {
+          eventId: eventId,
+          teamId: projectId,
+          giverId: user.id,
+        },
+      });
 
       // Update or Create Reward
       if (existingReward) {
@@ -92,17 +99,11 @@ eventsActionRoute.put("/give-vr", async (c) => {
         }
       }
 
-      // Return new balance (Remaining)
-      return {
-        virtualReward: participant.virtualReward - projectedUsed,
-        totalLimit: participant.virtualReward,
-        totalUsed: projectedUsed
-      };
+      return { totalLimit: participant.virtualReward, totalUsed: newTotalUsed };
     });
 
     return c.json({
       message: "VR updated successfully",
-      newBalance: result.virtualReward, // Remaining balance
       totalLimit: result.totalLimit,
       totalUsed: result.totalUsed,
     });
@@ -155,7 +156,7 @@ eventsActionRoute.post("/reset-vr", async (c) => {
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      // Delete rewards
+      // Delete rewards for this team
       await tx.teamReward.deleteMany({
         where: {
           eventId,
@@ -163,26 +164,23 @@ eventsActionRoute.post("/reset-vr", async (c) => {
           giverId: user.id,
         },
       });
-      
-      // Calculate remaining balance
-      const allRewards = await tx.teamReward.findMany({
+
+      // Calculate remaining usage
+      const remainingRewards = await tx.teamReward.aggregate({
         where: {
-            eventId: eventId,
+            eventId,
             giverId: user.id,
         },
+        _sum: { reward: true }
       });
-      const currentUsed = allRewards.reduce((sum, r) => sum + r.reward, 0);
+      
+      const totalUsed = remainingRewards._sum.reward || 0;
 
-      return { 
-        virtualReward: participant.virtualReward - currentUsed,
-        totalLimit: participant.virtualReward,
-        totalUsed: currentUsed
-      };
+      return { totalLimit: participant.virtualReward, totalUsed };
     });
 
     return c.json({
       message: "VR refunded successfully",
-      newBalance: result.virtualReward,
       totalLimit: result.totalLimit,
       totalUsed: result.totalUsed,
     });
@@ -196,7 +194,7 @@ eventsActionRoute.post("/reset-vr", async (c) => {
 eventsActionRoute.put("/give-special", async (c) => {
   const user = c.get("user");
   const eventId = c.req.param("eventId");
-  const { projectId, rewardIds } = await c.req.json(); // Expect rewardIds array
+  const { projectId, rewardIds } = await c.req.json();
 
   if (!eventId || !projectId || !Array.isArray(rewardIds)) {
     return c.json({ message: "Invalid input" }, 400);
@@ -219,7 +217,7 @@ eventsActionRoute.put("/give-special", async (c) => {
   });
   if (!team) return c.json({ message: "Team not found" }, 404);
 
-  // Validate all rewards exist
+  // Validate all rewardIds exist and belong to event
   const rewards = await prisma.specialReward.findMany({
     where: {
       id: { in: rewardIds },
@@ -228,90 +226,73 @@ eventsActionRoute.put("/give-special", async (c) => {
   });
 
   if (rewards.length !== rewardIds.length) {
-    return c.json({ message: "Some rewards not found" }, 404);
+    return c.json({ message: "Some rewards not found or invalid" }, 400);
   }
 
   try {
     await prisma.$transaction(async (tx) => {
-      // 1. Delete all existing votes for this team by this committee
-      await tx.specialRewardVote.deleteMany({
+      // 1. Get current votes by this committee for this team
+      const currentVotes = await tx.specialRewardVote.findMany({
         where: {
           committeeId: participant.id,
           teamId: projectId,
         },
       });
 
-      // 2. Create new votes
-      if (rewardIds.length > 0) {
-        await tx.specialRewardVote.createMany({
-          data: rewardIds.map((rid: string) => ({
-            rewardId: rid,
-            committeeId: participant.id,
-            teamId: projectId,
-          })),
+      const currentRewardIds = currentVotes.map((v) => v.rewardId);
+      
+      // 2. Identify rewards to remove (in current but not in new list)
+      const toRemove = currentRewardIds.filter((id) => !rewardIds.includes(id));
+      
+      // 3. Identify rewards to add (in new list but not in current)
+      const toAdd = rewardIds.filter((id) => !currentRewardIds.includes(id));
+
+      // 4. Check if any "toAdd" reward is already given to ANOTHER team by this committee
+      // We can rely on unique constraint (rewardId, committeeId) to throw error,
+      // but checking explicitly gives better error message.
+      if (toAdd.length > 0) {
+        const conflicts = await tx.specialRewardVote.findMany({
+            where: {
+                committeeId: participant.id,
+                rewardId: { in: toAdd },
+                teamId: { not: projectId } 
+            },
+            include: { reward: true }
+        });
+
+        if (conflicts.length > 0) {
+            const conflictNames = conflicts.map(c => c.reward.name).join(", ");
+            throw new Error(`Rewards already given to other teams: ${conflictNames}`);
+        }
+      }
+
+      // 5. Remove
+      if (toRemove.length > 0) {
+        await tx.specialRewardVote.deleteMany({
+            where: {
+                committeeId: participant.id,
+                teamId: projectId,
+                rewardId: { in: toRemove }
+            }
+        });
+      }
+
+      // 6. Add
+      for (const rid of toAdd) {
+        await tx.specialRewardVote.create({
+            data: {
+                committeeId: participant.id,
+                teamId: projectId,
+                rewardId: rid
+            }
         });
       }
     });
 
     return c.json({ message: "Special rewards updated successfully" });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error giving special reward:", error);
-    return c.json({ message: "Internal server error" }, 500);
-  }
-});
-
-// Give Comment
-eventsActionRoute.post("/give-comment", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("eventId");
-  const { projectId, content } = await c.req.json();
-
-  if (!eventId || !projectId || typeof content !== "string") {
-    return c.json({ message: "Invalid input" }, 400);
-  }
-
-  // Check if user is participant (Guest/Committee)
-  const participant = await prisma.eventParticipant.findFirst({
-    where: {
-      eventId: eventId,
-      userId: user.id,
-      eventGroup: { in: ["GUEST", "COMMITTEE"] },
-    },
-  });
-
-  if (!participant) {
-    return c.json({ message: "You are not a participant" }, 403);
-  }
-
-  try {
-    const existingComment = await prisma.comment.findFirst({
-      where: {
-        eventId,
-        teamId: projectId,
-        userId: user.id,
-      },
-    });
-
-    if (existingComment) {
-      await prisma.comment.update({
-        where: { id: existingComment.id },
-        data: { content },
-      });
-    } else {
-      await prisma.comment.create({
-        data: {
-          eventId,
-          teamId: projectId,
-          userId: user.id,
-          content,
-        },
-      });
-    }
-
-    return c.json({ message: "Comment saved successfully" });
-  } catch (error) {
-    console.error("Error saving comment:", error);
-    return c.json({ message: "Internal server error" }, 500);
+    return c.json({ message: error.message || "Internal server error" }, 400);
   }
 });
 

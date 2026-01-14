@@ -180,7 +180,9 @@ eventsRoute.get("/me/history", async (c) => {
       const rank = p.team?.rankings.find((r) => r.eventId === eventId)?.rank;
 
       return {
+        eventId: p.event.id,
         eventName: p.event.eventName,
+        teamId: p.team?.id,
         teamName: p.team?.teamName || "-",
         place: rank ? rank.toString() : "-",
         specialReward: specialRewardsWon.length > 0 ? specialRewardsWon.join(", ") : "-",
@@ -221,6 +223,7 @@ eventsRoute.get("/me/history", async (c) => {
           : "-";
 
       return {
+        eventId: p.event.id,
         eventName: p.event.eventName,
         rating: avgRating,
       };
@@ -752,12 +755,34 @@ eventsRoute.put("/:id/participants/:pid", async (c) => {
       }
     }
   }
+  
+  const existing = await prisma.eventParticipant.findFirst({ where: { id: pid, eventId: id } });
+  if (!existing) return c.json({ message: "Participant not found" }, 404);
+
+  // If role changes, reset scores/rewards given by this user
+  if (data.eventGroup && data.eventGroup !== existing.eventGroup) {
+      // 1. Delete Virtual Rewards (TeamReward) given by this user in this event
+      await prisma.teamReward.deleteMany({
+          where: {
+              eventId: id,
+              giverId: existing.userId
+          }
+      });
+
+      // 2. Delete Special Rewards (SpecialRewardVote) given by this committee (participant)
+      // Note: SpecialRewardVote uses committeeId which is the participant ID
+      await prisma.specialRewardVote.deleteMany({
+          where: {
+              committeeId: pid // pid is existing.id
+          }
+      });
+  }
+
   if (typeof body?.isLeader === "boolean") data.isLeader = body.isLeader;
   if (typeof body?.virtualReward === "number") data.virtualReward = Math.max(0, body.virtualReward);
   if (body?.teamId === null) data.teamId = null;
   else if (typeof body?.teamId === "string" && body.teamId.length > 0) data.teamId = body.teamId;
-  const existing = await prisma.eventParticipant.findFirst({ where: { id: pid, eventId: id } });
-  if (!existing) return c.json({ message: "Participant not found" }, 404);
+
   if (existing.eventGroup === "ORGANIZER") {
     if (!organizer.isLeader) {
       return c.json({ message: "Only organizer leader can manage organizer group" }, 403);
@@ -925,10 +950,15 @@ eventsRoute.put("/:id/teams/:teamId", async (c) => {
   const participant = await prisma.eventParticipant.findFirst({
     where: { eventId, userId: user?.id },
   });
-  if (!participant || participant.teamId !== teamId) {
-    // Only team members can edit (or maybe just leader? for now let's say any member)
-    // Actually, usually only leader can edit. Let's check isLeader.
-    if (!participant?.isLeader) return c.json({ message: "Forbidden" }, 403);
+
+  // Permission Check:
+  // Only the Leader of THIS team can edit.
+  if (!participant) return c.json({ message: "Forbidden" }, 403);
+
+  const isTeamLeader = participant.teamId === teamId && participant.isLeader;
+
+  if (!isTeamLeader) {
+    return c.json({ message: "Forbidden" }, 403);
   }
 
   if (file) {

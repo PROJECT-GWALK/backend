@@ -1,12 +1,12 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
-import userinfoRoute from './routes/userinfo.js'
 import userManagement from './routes/usermanagement.js'
 import adminDashboard from './routes/admindashboard.js'
 import filesRoute from './routes/files.js'
 import eventsRoute from './routes/events.js'
 import { swaggerUI } from '@hono/swagger-ui'
 import { openApiDoc } from './swingger/ApiDoc.js'
+import userRoute from './routes/userinfo.js'
 
 const app = new Hono()
 
@@ -28,7 +28,7 @@ app.route("/files", filesRoute);
 //////////////////////////////////////////////////////////
 // USER
 //////////////////////////////////////////////////////////
-app.route("/api/user/@me", userinfoRoute);
+app.route("/api/user/@me", userRoute);
 app.route("/api/events", eventsRoute)
 
 

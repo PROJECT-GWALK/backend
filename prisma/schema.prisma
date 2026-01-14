@@ -290,7 +290,7 @@ model SpecialRewardVote {
   committee EventParticipant @relation(fields: [committeeId], references: [id], onDelete: Cascade)
   team      Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
-  @@unique([rewardId, committeeId])
+  @@unique([rewardId, committeeId, teamId])
 }
 
 //////////////////////////////////////////////////////////

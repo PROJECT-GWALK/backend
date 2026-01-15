@@ -59,6 +59,7 @@ eventsRoute.get("/", async (c) => {
       endJoinDate: true,
       publicView: true,
       participants: { where: { userId: user?.id }, select: { eventGroup: true, isLeader: true } },
+      ratings: { where: { userId: user?.id }, select: { rating: true } },
     },
   });
   const payload = events.map((e) => ({
@@ -74,6 +75,7 @@ eventsRoute.get("/", async (c) => {
     publicView: e.publicView,
     role: e.participants?.[0]?.eventGroup || null,
     isLeader: e.participants?.[0]?.isLeader || false,
+    userRating: e.ratings?.[0]?.rating || null,
   }));
   return c.json({ message: "ok", events: payload });
 });
@@ -95,6 +97,7 @@ eventsRoute.get("/me", async (c) => {
       endJoinDate: true,
       publicView: true,
       participants: { where: { userId: user?.id }, select: { eventGroup: true, isLeader: true } },
+      ratings: { where: { userId: user?.id }, select: { rating: true } },
     },
   });
   const payload = events.map((e) => ({
@@ -110,6 +113,7 @@ eventsRoute.get("/me", async (c) => {
     publicView: e.publicView,
     role: e.participants?.[0]?.eventGroup || null,
     isLeader: e.participants?.[0]?.isLeader || false,
+    userRating: e.ratings?.[0]?.rating || null,
   }));
   return c.json({ message: "ok", events: payload });
 });
@@ -179,6 +183,15 @@ eventsRoute.get("/me/history", async (c) => {
 
       const rank = p.team?.rankings.find((r) => r.eventId === eventId)?.rank;
 
+      const userRating = await prisma.eventRating.findUnique({
+        where: {
+          eventId_userId: {
+            userId: user!.id,
+            eventId: p.eventId,
+          },
+        },
+      });
+
       return {
         eventId: p.event.id,
         eventName: p.event.eventName,
@@ -186,6 +199,7 @@ eventsRoute.get("/me/history", async (c) => {
         teamName: p.team?.teamName || "-",
         place: rank ? rank.toString() : "-",
         specialReward: specialRewardsWon.length > 0 ? specialRewardsWon.join(", ") : "-",
+        userRating: userRating ? userRating.rating : null,
       };
     })
   );
@@ -234,6 +248,106 @@ eventsRoute.get("/me/history", async (c) => {
     message: "ok",
     participated: participatedData.filter((e) => e !== null),
     organized: organizedData,
+  });
+});
+
+eventsRoute.get("/:id/presenter/stats", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+
+  if (!user) return c.json({ message: "Unauthorized" }, 401);
+
+  // 1. Find user's team in this event
+  const participant = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId,
+      userId: user.id,
+      eventGroup: "PRESENTER",
+    },
+    include: { team: true },
+  });
+
+  if (!participant || !participant.teamId) {
+    return c.json({ message: "You are not a presenter in a team for this event" }, 404);
+  }
+
+  const teamId = participant.teamId;
+
+  // 2. Calculate Rank & Score
+  const allTeams = await prisma.team.findMany({
+    where: { eventId },
+    include: { rewards: true },
+  });
+
+  const teamScores = allTeams.map((t) => ({
+    id: t.id,
+    score: t.rewards.reduce((acc, r) => acc + r.reward, 0),
+  }));
+
+  // Sort descending
+  teamScores.sort((a, b) => b.score - a.score);
+
+  const myRankIndex = teamScores.findIndex((t) => t.id === teamId);
+  const myRank = myRankIndex !== -1 ? myRankIndex + 1 : "-";
+  const myScore = teamScores.find((t) => t.id === teamId)?.score || 0;
+
+  // 3. Comments Breakdown
+  const comments = await prisma.comment.findMany({
+    where: { teamId, eventId },
+    include: {
+      user: {
+        include: {
+          participants: {
+            where: { eventId },
+          },
+        },
+      },
+    },
+  });
+
+  let commentTotal = 0;
+  let commentGuest = 0;
+  let commentCommittee = 0;
+
+  comments.forEach((cm) => {
+    commentTotal++;
+    const role = cm.user.participants[0]?.eventGroup;
+    if (role === "GUEST") commentGuest++;
+    if (role === "COMMITTEE") commentCommittee++;
+  });
+
+  // 4. Special Rewards Votes
+  const allSpecialRewards = await prisma.specialReward.findMany({
+    where: { eventId },
+  });
+
+  const specialVotes = await prisma.specialRewardVote.findMany({
+    where: { teamId },
+  });
+
+  const voteCounts: Record<string, number> = {};
+  specialVotes.forEach((v) => {
+    voteCounts[v.rewardId] = (voteCounts[v.rewardId] || 0) + 1;
+  });
+
+  const specialRewards = allSpecialRewards.map((r) => ({
+    name: r.name,
+    image: r.image,
+    count: voteCounts[r.id] || 0,
+  }));
+
+  return c.json({
+    message: "ok",
+    stats: {
+      rank: myRank,
+      score: myScore,
+      comments: {
+        total: commentTotal,
+        guest: commentGuest,
+        committee: commentCommittee,
+      },
+      specialRewards,
+    },
   });
 });
 
@@ -342,10 +456,32 @@ eventsRoute.get("/:id", async (c) => {
   const specialPrizeCount = event.specialRewards.length;
   
   // Count total votes for stats (regardless of who voted)
-  const totalSpecialVotes = await prisma.specialRewardVote.count({
+  const allVotes = await prisma.specialRewardVote.findMany({
     where: { reward: { eventId: id } },
+    select: { rewardId: true, teamId: true },
   });
-  const specialPrizeUsed = totalSpecialVotes; 
+
+  const rewardStats = new Map<string, { votes: number; teams: Set<string> }>();
+  allVotes.forEach((v) => {
+    if (!rewardStats.has(v.rewardId)) {
+      rewardStats.set(v.rewardId, { votes: 0, teams: new Set() });
+    }
+    const stat = rewardStats.get(v.rewardId)!;
+    stat.votes++;
+    stat.teams.add(v.teamId);
+  });
+
+  const totalSpecialVotes = allVotes.length;
+  const specialPrizeUsed = totalSpecialVotes;
+
+  const enhancedSpecialRewards = event.specialRewards.map((r) => {
+    const stat = rewardStats.get(r.id) || { votes: 0, teams: new Set() };
+    return {
+      ...r,
+      voteCount: stat.votes,
+      teamCount: stat.teams.size,
+    };
+  });
 
   // User Specific Stats
   const myParticipant = user ? participants.find((p) => p.userId === user.id) : null;
@@ -409,6 +545,7 @@ eventsRoute.get("/:id", async (c) => {
     vrUsed,
     specialPrizeCount,
     specialPrizeUsed,
+    specialRewards: enhancedSpecialRewards,
     awardsUnused,
     presenterTeams,
     myVirtualTotal,
@@ -1065,6 +1202,91 @@ eventsRoute.post("/:id/teams/:teamId/members", async (c) => {
   });
 
   return c.json({ message: "ok" });
+});
+
+eventsRoute.get("/:id/teams/:teamId/comments", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const teamId = c.req.param("teamId");
+
+  if (!user) return c.json({ message: "Unauthorized" }, 401);
+
+  const participant = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id },
+    include: { team: true },
+  });
+
+  if (!participant) return c.json({ message: "Forbidden" }, 403);
+
+  let comments: any[] = [];
+
+  // 1. Team Members & Organizer see all comments from Committee/Guest
+  if (participant.teamId === teamId || participant.eventGroup === "ORGANIZER") {
+    comments = await prisma.comment.findMany({
+      where: {
+        eventId,
+        teamId,
+        user: {
+          participants: {
+            some: {
+              eventId,
+              eventGroup: { in: ["COMMITTEE", "GUEST"] },
+            },
+          },
+        },
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            participants: {
+              where: { eventId },
+              select: { eventGroup: true },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  } else if (["COMMITTEE", "GUEST"].includes(participant.eventGroup || "")) {
+    // 2. Committee/Guest see only their own comment
+    comments = await prisma.comment.findMany({
+      where: {
+        eventId,
+        teamId,
+        userId: user.id,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            image: true,
+            participants: {
+              where: { eventId },
+              select: { eventGroup: true },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  const formattedComments = comments.map((comment) => ({
+    id: comment.id,
+    content: comment.content,
+    createdAt: comment.createdAt,
+    user: {
+      id: comment.user.id,
+      name: comment.user.name,
+      image: comment.user.image,
+      role: comment.user.participants[0]?.eventGroup || "UNKNOWN",
+    },
+  }));
+
+  return c.json({ message: "ok", comments: formattedComments });
 });
 
 eventsRoute.get("/:id/teams/:teamId", async (c) => {

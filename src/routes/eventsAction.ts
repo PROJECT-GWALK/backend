@@ -333,4 +333,149 @@ eventsActionRoute.post("/reset-special", async (c) => {
   }
 });
 
+// Give Comment
+eventsActionRoute.post("/give-comment", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("eventId");
+  const { projectId, content } = await c.req.json();
+
+  if (!eventId || !projectId || typeof content !== "string") {
+    return c.json({ message: "Invalid input" }, 400);
+  }
+
+  const participant = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId: eventId,
+      userId: user.id,
+      eventGroup: { in: ["GUEST", "COMMITTEE"] },
+    },
+  });
+
+  if (!participant) {
+    return c.json({ message: "You are not a participant (Guest/Committee) in this event" }, 403);
+  }
+
+  const team = await prisma.team.findFirst({
+    where: { id: projectId, eventId: eventId },
+  });
+  if (!team) return c.json({ message: "Team not found" }, 404);
+
+  try {
+    // Check if comment already exists for this user and team
+    const existing = await prisma.comment.findFirst({
+      where: {
+        eventId,
+        teamId: projectId,
+        userId: user.id,
+      },
+    });
+
+    if (existing) {
+      await prisma.comment.update({
+        where: { id: existing.id },
+        data: { content },
+      });
+    } else {
+      await prisma.comment.create({
+        data: {
+          eventId,
+          teamId: projectId,
+          userId: user.id,
+          content,
+        },
+      });
+    }
+
+    return c.json({ message: "Comment posted successfully" });
+  } catch (error) {
+    console.error("Error posting comment:", error);
+    return c.json({ message: "Internal server error" }, 500);
+  }
+});
+
+// Rate Event (PUT)
+eventsActionRoute.put("/rate", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("eventId");
+  const { rating, comment } = await c.req.json();
+
+  if (!eventId || typeof rating !== "number" || rating < 1 || rating > 5) {
+    return c.json({ message: "Invalid input. Rating must be between 1 and 5." }, 400);
+  }
+
+  // Check participation
+  const participant = await prisma.eventParticipant.findFirst({
+    where: {
+      eventId: eventId,
+      userId: user.id,
+    },
+  });
+
+  if (!participant) {
+    return c.json({ message: "You are not a participant in this event" }, 403);
+  }
+
+  if (participant.eventGroup === "ORGANIZER") {
+    return c.json({ message: "Organizers cannot rate their own events" }, 403);
+  }
+
+  try {
+    const existing = await prisma.eventRating.findUnique({
+      where: {
+        eventId_userId: {
+          userId: user.id,
+          eventId: eventId,
+        },
+      },
+    });
+
+    if (existing) {
+      await prisma.eventRating.update({
+        where: { id: existing.id },
+        data: { rating, comment },
+      });
+    } else {
+      await prisma.eventRating.create({
+        data: {
+          eventId,
+          userId: user.id,
+          rating,
+          comment,
+        },
+      });
+    }
+
+    return c.json({ message: "Rating submitted successfully" });
+  } catch (error) {
+    console.error("Error submitting rating:", error);
+    return c.json({ message: "Internal server error" }, 500);
+  }
+});
+
+// Get User Rating (GET)
+eventsActionRoute.get("/rate", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("eventId");
+
+  if (!eventId) {
+    return c.json({ message: "Event ID is required" }, 400);
+  }
+
+  try {
+    const rating = await prisma.eventRating.findUnique({
+      where: {
+        eventId_userId: {
+          userId: user.id,
+          eventId: eventId as string,
+        },
+      },
+    });
+
+    return c.json({ rating: rating ? rating.rating : null, comment: rating ? rating.comment : null });
+  } catch (error) {
+    console.error("Error fetching rating:", error);
+    return c.json({ message: "Internal server error" }, 500);
+  }
+});
+
 export default eventsActionRoute;

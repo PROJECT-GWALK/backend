@@ -478,4 +478,47 @@ eventsActionRoute.get("/rate", async (c) => {
   }
 });
 
+// Get All Ratings (GET) - For Organizer
+eventsActionRoute.get("/ratings", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("eventId");
+
+  if (!eventId) {
+    return c.json({ message: "Event ID is required" }, 400);
+  }
+
+  try {
+    // Check if user is organizer
+    const participant = await prisma.eventParticipant.findFirst({
+      where: {
+        eventId: eventId,
+        userId: user.id,
+        eventGroup: "ORGANIZER",
+      },
+    });
+
+    if (!participant) {
+      return c.json({ message: "Only organizers can view all ratings" }, 403);
+    }
+
+    const ratings = await prisma.eventRating.findMany({
+      where: { eventId: eventId },
+      include: {
+        user: {
+          select: {
+            name: true,
+            image: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return c.json({ ratings });
+  } catch (error) {
+    console.error("Error fetching ratings:", error);
+    return c.json({ message: "Internal server error" }, 500);
+  }
+});
+
 export default eventsActionRoute;

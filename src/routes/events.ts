@@ -167,7 +167,7 @@ eventsRoute.get("/me/history", async (c) => {
       if (!isFinished) return null;
 
       // Calculate Special Rewards won by this team
-      let specialRewardsWon: string[] = [];
+      let specialRewardsWon: { name: string; image: string | null; description: string | null }[] = [];
       if (teamId) {
         const rewards = await prisma.specialReward.findMany({
           where: { eventId },
@@ -190,12 +190,33 @@ eventsRoute.get("/me/history", async (c) => {
           }
 
           if (winnerTeamId === teamId && maxVotes > 0) {
-            specialRewardsWon.push(r.name);
+            specialRewardsWon.push({
+              name: r.name,
+              image: r.image,
+              description: r.description,
+            });
           }
         }
       }
 
-      const rank = p.team?.rankings.find((r) => r.eventId === eventId)?.rank;
+      let rank = p.team?.rankings.find((r) => r.eventId === eventId)?.rank;
+
+      if (!rank && teamId) {
+        const allTeams = await prisma.team.findMany({
+          where: { eventId },
+          include: { rewards: true },
+        });
+
+        const scores = allTeams.map((t) => ({
+          id: t.id,
+          score: t.rewards.reduce((acc, r) => acc + r.reward, 0),
+        }));
+
+        scores.sort((a, b) => b.score - a.score);
+
+        const index = scores.findIndex((t) => t.id === teamId);
+        if (index !== -1) rank = index + 1;
+      }
 
       const userRating = await prisma.eventRating.findUnique({
         where: {
@@ -212,7 +233,8 @@ eventsRoute.get("/me/history", async (c) => {
         teamId: p.team?.id,
         teamName: p.team?.teamName || "-",
         place: rank ? rank.toString() : "-",
-        specialReward: specialRewardsWon.length > 0 ? specialRewardsWon.join(", ") : "-",
+        specialReward: specialRewardsWon.map((r) => r.name).join(", "),
+        specialRewards: specialRewardsWon,
         userRating: userRating ? userRating.rating : null,
       };
     })

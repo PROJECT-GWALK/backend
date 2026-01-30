@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { authMiddleware } from "../middlewares/auth.js";
 import { prisma } from "../lib/prisma.js";
 import { getMinio } from "../lib/minio.js";
+import { updateUserProfileSchema } from "../lib/types.js";
 
 const userRoute = new Hono<{ Variables: { user: User } }>();
 
@@ -42,11 +43,18 @@ userRoute.put("/", async (c) => {
   const minio = getMinio();
   const form = await c.req.parseBody();
 
+  const result = updateUserProfileSchema.safeParse(form);
+  if (!result.success) {
+    return c.json({ message: "Invalid input", errors: result.error }, 400);
+  }
+
+  const { username, name, description, image } = result.data;
+
   const updateData: any = {};
-  if (form["username"]) updateData.username = form["username"];
-  if (form["name"]) updateData.name = form["name"];
-  if (form["description"]) updateData.description = form["description"];
-  if (form["image"] === "null") {
+  if (username) updateData.username = username;
+  if (name) updateData.name = name;
+  if (description) updateData.description = description;
+  if (image === "null") {
     updateData.image = null;
   }
 

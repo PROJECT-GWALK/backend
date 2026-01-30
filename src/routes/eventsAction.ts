@@ -1,22 +1,34 @@
 
 import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import { authMiddleware } from "../middlewares/auth.js";
 import type { User } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import {
+  giveVrSchema,
+  resetVrSchema,
+  giveSpecialSchema,
+  resetSpecialSchema,
+  giveCommentSchema,
+  rateEventSchema,
+} from "../lib/types.js";
 
 const eventsActionRoute = new Hono<{ Variables: { user: User } }>();
 
 eventsActionRoute.use("*", authMiddleware);
 
 // Update/Give VR (PUT)
-eventsActionRoute.put("/give-vr", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("eventId");
-  const { projectId, amount } = await c.req.json();
+eventsActionRoute.put(
+  "/give-vr",
+  zValidator("json", giveVrSchema),
+  async (c) => {
+    const user = c.get("user");
+    const eventId = c.req.param("eventId");
+    const { projectId, amount } = c.req.valid("json");
 
-  if (!eventId || !projectId || typeof amount !== "number" || amount < 0) {
-    return c.json({ message: "Invalid input" }, 400);
-  }
+    if (!eventId) {
+      return c.json({ message: "Invalid input" }, 400);
+    }
 
   // 1. Check if user is a participant (Guest/Committee)
   const participant = await prisma.eventParticipant.findFirst({
@@ -115,14 +127,17 @@ eventsActionRoute.put("/give-vr", async (c) => {
 });
 
 // Reset/Refund VR
-eventsActionRoute.post("/reset-vr", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("eventId");
-  const { projectId } = await c.req.json();
+eventsActionRoute.post(
+  "/reset-vr",
+  zValidator("json", resetVrSchema),
+  async (c) => {
+    const user = c.get("user");
+    const eventId = c.req.param("eventId");
+    const { projectId } = c.req.valid("json");
 
-  if (!eventId || !projectId) {
-    return c.json({ message: "Invalid input" }, 400);
-  }
+    if (!eventId) {
+      return c.json({ message: "Invalid input" }, 400);
+    }
 
   const participant = await prisma.eventParticipant.findFirst({
     where: {
@@ -191,14 +206,17 @@ eventsActionRoute.post("/reset-vr", async (c) => {
 });
 
 // Give Special Reward
-eventsActionRoute.put("/give-special", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("eventId");
-  const { projectId, rewardIds } = await c.req.json();
+eventsActionRoute.put(
+  "/give-special",
+  zValidator("json", giveSpecialSchema),
+  async (c) => {
+    const user = c.get("user");
+    const eventId = c.req.param("eventId");
+    const { projectId, rewardIds } = c.req.valid("json");
 
-  if (!eventId || !projectId || !Array.isArray(rewardIds)) {
-    return c.json({ message: "Invalid input" }, 400);
-  }
+    if (!eventId) {
+      return c.json({ message: "Invalid input" }, 400);
+    }
 
   const participant = await prisma.eventParticipant.findFirst({
     where: {
@@ -297,14 +315,17 @@ eventsActionRoute.put("/give-special", async (c) => {
 });
 
 // Reset Special Reward (Remove all special rewards given to this team by this user)
-eventsActionRoute.post("/reset-special", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("eventId");
-  const { projectId } = await c.req.json();
+eventsActionRoute.post(
+  "/reset-special",
+  zValidator("json", resetSpecialSchema),
+  async (c) => {
+    const user = c.get("user");
+    const eventId = c.req.param("eventId");
+    const { projectId } = c.req.valid("json");
 
-  if (!eventId || !projectId) {
-    return c.json({ message: "Invalid input" }, 400);
-  }
+    if (!eventId) {
+      return c.json({ message: "Invalid input" }, 400);
+    }
 
   const participant = await prisma.eventParticipant.findFirst({
     where: {
@@ -334,14 +355,17 @@ eventsActionRoute.post("/reset-special", async (c) => {
 });
 
 // Give Comment
-eventsActionRoute.post("/give-comment", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("eventId");
-  const { projectId, content } = await c.req.json();
+eventsActionRoute.post(
+  "/give-comment",
+  zValidator("json", giveCommentSchema),
+  async (c) => {
+    const user = c.get("user");
+    const eventId = c.req.param("eventId");
+    const { projectId, content } = c.req.valid("json");
 
-  if (!eventId || !projectId || typeof content !== "string") {
-    return c.json({ message: "Invalid input" }, 400);
-  }
+    if (!eventId) {
+      return c.json({ message: "Invalid input" }, 400);
+    }
 
   const participant = await prisma.eventParticipant.findFirst({
     where: {
@@ -394,14 +418,17 @@ eventsActionRoute.post("/give-comment", async (c) => {
 });
 
 // Rate Event (PUT)
-eventsActionRoute.put("/rate", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("eventId");
-  const { rating, comment } = await c.req.json();
+eventsActionRoute.put(
+  "/rate",
+  zValidator("json", rateEventSchema),
+  async (c) => {
+    const user = c.get("user");
+    const eventId = c.req.param("eventId");
+    const { rating, comment } = c.req.valid("json");
 
-  if (!eventId || typeof rating !== "number" || rating < 1 || rating > 5) {
-    return c.json({ message: "Invalid input. Rating must be between 1 and 5." }, 400);
-  }
+    if (!eventId) {
+      return c.json({ message: "Invalid input" }, 400);
+    }
 
   // Check participation
   const participant = await prisma.eventParticipant.findFirst({

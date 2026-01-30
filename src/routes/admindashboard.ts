@@ -1,18 +1,22 @@
 import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import { authMiddleware } from "../middlewares/auth.js";
 import { adminOnly } from "../middlewares/adminOnly.js";
 import { prisma } from "../lib/prisma.js";
+import { adminDashboardParams } from "../lib/types.js";
 
 const adminDashboard = new Hono();
 
 adminDashboard
   .use("*", authMiddleware, adminOnly)
 
-  .get("/userdailyactive/:year?/:month?", async (c) => {
-    const yearParam = c.req.param("year");
-    const monthParam = c.req.param("month");
+  .get(
+    "/userdailyactive/:year?/:month?",
+    zValidator("param", adminDashboardParams),
+    async (c) => {
+      const { year: yearParam, month: monthParam } = c.req.valid("param");
 
-    let buddhistYear = yearParam ? parseInt(yearParam, 10) : null;
+      let buddhistYear = yearParam ? parseInt(yearParam, 10) : null;
     if (!buddhistYear) {
       const now = new Date();
       buddhistYear = now.getFullYear() + 543;

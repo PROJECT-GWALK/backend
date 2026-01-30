@@ -1,13 +1,14 @@
 import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import { getMinio } from "../lib/minio.js";
+import { uploadFileSchema } from "../lib/types.js";
 
 const uploadRoute = new Hono();
 
-uploadRoute.post("/", async (c) => {
-  const formData = await c.req.parseBody();
-  const file = formData["file"] as File;
+uploadRoute.post("/", zValidator("form", uploadFileSchema), async (c) => {
+  const { file } = c.req.valid("form");
 
-  if (!file) {
+  if (!file || !(file instanceof File)) {
     return c.json({ message: "No file uploaded" }, 400);
   }
 

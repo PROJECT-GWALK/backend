@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import { authMiddleware, optionalAuthMiddleware } from "../middlewares/auth.js";
 import { getMinio } from "../lib/minio.js";
 import { prisma } from "../lib/prisma.js";
@@ -7,6 +8,19 @@ import sharp from "sharp";
 import path from "node:path";
 import eventsActionRoute from "./eventsAction.js";
 import type { User } from "../generated/prisma/client.js";
+import {
+  inviteRoleQuerySchema,
+  invitePreviewSchema,
+  inviteSchema,
+  updateParticipantSchema,
+  createTeamSchema,
+  updateTeamSchema,
+  candidateQuerySchema,
+  addTeamMemberSchema,
+  idParamSchema,
+  eventAndTeamIdParamSchema,
+  eventAndParticipantIdParamSchema,
+} from "../lib/types.js";
 
 const eventsRoute = new Hono<{ Variables: { user: User | null } }>();
 
@@ -351,9 +365,9 @@ eventsRoute.get("/:id/presenter/stats", async (c) => {
   });
 });
 
-eventsRoute.get("/:id", async (c) => {
+eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
   const user = c.get("user");
-  const id = c.req.param("id");
+  const { id } = c.req.valid("param");
 
   const event = await prisma.event.findUnique({
     where: { id },
@@ -652,143 +666,168 @@ eventsRoute.get("/:id/rankings", async (c) => {
   });
 });
 
-eventsRoute.get("/:id/invite/sign", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-  const role = c.req.query("role") as keyof typeof roleMap | undefined;
-  if (!role || !(role in roleMap)) return c.json({ message: "invalid role" }, 400);
-  if (!user) return c.json({ message: "Unauthorized" }, 401);
-  const event = await prisma.event.findUnique({ where: { id: eventId } });
-  if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
-  const existing = await prisma.eventParticipant.findFirst({
-    where: { eventId, userId: user.id },
-  });
-  if (existing) return c.json({ message: "Already joined" }, 400);
-  const sig = signInvite(eventId, user.id, role);
-  return c.json({ message: "ok", sig });
-});
+eventsRoute.get(
+  "/:id/invite/sign",
+  zValidator("param", idParamSchema),
+  zValidator("query", inviteRoleQuerySchema),
+  async (c) => {
+    const user = c.get("user");
+    const { id: eventId } = c.req.valid("param");
+    const { role } = c.req.valid("query");
 
-eventsRoute.get("/:id/invite/token", async (c) => {
-  const eventId = c.req.param("id");
-  const role = c.req.query("role") as keyof typeof roleMap | undefined;
-  if (!role || !(role in roleMap)) return c.json({ message: "invalid role" }, 400);
-  
-  const event = await prisma.event.findUnique({ where: { id: eventId } });
-  if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
-  
-  let linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
-  if (!linkInvite) {
-    linkInvite = await prisma.linkInvite.create({
-      data: { eventId },
+    if (!user) return c.json({ message: "Unauthorized" }, 401);
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event || event.status !== "PUBLISHED")
+      return c.json({ message: "Event not found" }, 404);
+    const existing = await prisma.eventParticipant.findFirst({
+      where: { eventId, userId: user.id },
     });
+    if (existing) return c.json({ message: "Already joined" }, 400);
+    const sig = signInvite(eventId, user.id, role);
+    return c.json({ message: "ok", sig });
   }
+);
 
-  let token = "";
-  if (role === "committee") token = linkInvite.committeeToken;
-  else if (role === "presenter") token = linkInvite.presenterToken;
-  else if (role === "guest") token = linkInvite.guestToken;
+eventsRoute.get(
+  "/:id/invite/token",
+  zValidator("param", idParamSchema),
+  zValidator("query", inviteRoleQuerySchema),
+  async (c) => {
+    const { id: eventId } = c.req.valid("param");
+    const { role } = c.req.valid("query");
 
-  return c.json({ message: "ok", token });
-});
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event || event.status !== "PUBLISHED")
+      return c.json({ message: "Event not found" }, 404);
 
-eventsRoute.post("/:id/invite/token/refresh", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-  const role = c.req.query("role") as keyof typeof roleMap | undefined;
-  if (!role || !(role in roleMap)) return c.json({ message: "invalid role" }, 400);
+    let linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
+    if (!linkInvite) {
+      linkInvite = await prisma.linkInvite.create({
+        data: { eventId },
+      });
+    }
 
-  const event = await prisma.event.findUnique({ where: { id: eventId } });
-  if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
+    let token = "";
+    if (role === "committee") token = linkInvite.committeeToken;
+    else if (role === "presenter") token = linkInvite.presenterToken;
+    else if (role === "guest") token = linkInvite.guestToken;
 
-  // Check if user is an organizer
-  const organizer = await prisma.eventParticipant.findFirst({
-    where: { eventId, userId: user?.id, eventGroup: "ORGANIZER" },
-  });
-  if (!organizer) return c.json({ message: "Forbidden" }, 403);
+    return c.json({ message: "ok", token });
+  }
+);
 
-  let linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
-  if (!linkInvite) {
-    linkInvite = await prisma.linkInvite.create({
-      data: { eventId },
+eventsRoute.post(
+  "/:id/invite/token/refresh",
+  zValidator("query", inviteRoleQuerySchema),
+  async (c) => {
+    const user = c.get("user");
+    const eventId = c.req.param("id");
+    const { role } = c.req.valid("query");
+
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event || event.status !== "PUBLISHED")
+      return c.json({ message: "Event not found" }, 404);
+
+    // Check if user is an organizer
+    const organizer = await prisma.eventParticipant.findFirst({
+      where: { eventId, userId: user?.id, eventGroup: "ORGANIZER" },
     });
+    if (!organizer) return c.json({ message: "Forbidden" }, 403);
+
+    let linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
+    if (!linkInvite) {
+      linkInvite = await prisma.linkInvite.create({
+        data: { eventId },
+      });
+    }
+
+    // Update token for specific role
+    const updatedLinkInvite = await prisma.linkInvite.update({
+      where: { eventId },
+      data: {
+        committeeToken: role === "committee" ? crypto.randomUUID() : undefined,
+        presenterToken: role === "presenter" ? crypto.randomUUID() : undefined,
+        guestToken: role === "guest" ? crypto.randomUUID() : undefined,
+      },
+    });
+
+    let token = "";
+    if (role === "committee") token = updatedLinkInvite.committeeToken;
+    else if (role === "presenter") token = updatedLinkInvite.presenterToken;
+    else if (role === "guest") token = updatedLinkInvite.guestToken;
+
+    return c.json({ message: "ok", token });
   }
-
-  // Update token for specific role
-  const updatedLinkInvite = await prisma.linkInvite.update({
-    where: { eventId },
-    data: {
-      committeeToken: role === "committee" ? crypto.randomUUID() : undefined,
-      presenterToken: role === "presenter" ? crypto.randomUUID() : undefined,
-      guestToken: role === "guest" ? crypto.randomUUID() : undefined,
-    },
-  });
-
-  let token = "";
-  if (role === "committee") token = updatedLinkInvite.committeeToken;
-  else if (role === "presenter") token = updatedLinkInvite.presenterToken;
-  else if (role === "guest") token = updatedLinkInvite.guestToken;
-
-  return c.json({ message: "ok", token });
-});
+);
 
 // Preview invite (no auth required). Returns role if the token/role is valid for this event.
-eventsRoute.get("/:id/invite/preview", async (c) => {
-  const eventId = c.req.param("id");
-  const token = c.req.query("token") || "";
-  const roleParam = c.req.query("role") as keyof typeof roleMap | undefined;
-  
-  const event = await prisma.event.findUnique({ where: { id: eventId } });
-  if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
-  
-  if (token) {
-    const linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
-    if (!linkInvite) return c.json({ message: "invalid token" }, 400);
-    
-    let role: keyof typeof roleMap | null = null;
-    if (linkInvite.committeeToken === token) role = "committee";
-    else if (linkInvite.presenterToken === token) role = "presenter";
-    else if (linkInvite.guestToken === token) role = "guest";
-    
-    if (!role) return c.json({ message: "invalid token" }, 400);
-    return c.json({ message: "ok", role: role });
+eventsRoute.get(
+  "/:id/invite/preview",
+  zValidator("param", idParamSchema),
+  zValidator("query", invitePreviewSchema),
+  async (c) => {
+    const { id: eventId } = c.req.valid("param");
+    const { token, role: roleParam } = c.req.valid("query");
+
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event || event.status !== "PUBLISHED")
+      return c.json({ message: "Event not found" }, 404);
+
+    if (token) {
+      const linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
+      if (!linkInvite) return c.json({ message: "invalid token" }, 400);
+
+      let role: keyof typeof roleMap | null = null;
+      if (linkInvite.committeeToken === token) role = "committee";
+      else if (linkInvite.presenterToken === token) role = "presenter";
+      else if (linkInvite.guestToken === token) role = "guest";
+
+      if (!role) return c.json({ message: "invalid token" }, 400);
+      return c.json({ message: "ok", role: role });
+    }
+
+    if (!roleParam || !(roleParam in roleMap))
+      return c.json({ message: "invalid role" }, 400);
+    return c.json({ message: "ok", role: roleParam });
   }
-  
-  if (!roleParam || !(roleParam in roleMap)) return c.json({ message: "invalid role" }, 400);
-  return c.json({ message: "ok", role: roleParam });
-});
+);
 
-eventsRoute.post("/:id/invite", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-  const token = c.req.query("token") || "";
-  let role = c.req.query("role") as keyof typeof roleMap | undefined;
-  const sig = c.req.query("sig") || "";
-  
-  const event = await prisma.event.findUnique({ where: { id: eventId } });
-  if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
-  if (!user) return c.json({ message: "Unauthorized" }, 401);
-  
-  const existing = await prisma.eventParticipant.findFirst({
-    where: { eventId, userId: user?.id },
-  });
-  if (existing) return c.json({ message: "Already joined" }, 400);
+eventsRoute.post(
+  "/:id/invite",
+  zValidator("param", idParamSchema),
+  zValidator("query", inviteSchema),
+  async (c) => {
+    const user = c.get("user");
+    const { id: eventId } = c.req.valid("param");
+    const { token, role, sig } = c.req.valid("query");
 
-  let targetRole: "ORGANIZER" | "PRESENTER" | "GUEST" | "COMMITTEE" | undefined;
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event || event.status !== "PUBLISHED")
+      return c.json({ message: "Event not found" }, 404);
+    if (!user) return c.json({ message: "Unauthorized" }, 401);
 
-  if (token) {
-    const linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
-    if (!linkInvite) return c.json({ message: "invalid token" }, 400);
+    const existing = await prisma.eventParticipant.findFirst({
+      where: { eventId, userId: user?.id },
+    });
+    if (existing) return c.json({ message: "Already joined" }, 400);
 
-    if (linkInvite.committeeToken === token) targetRole = "COMMITTEE";
-    else if (linkInvite.presenterToken === token) targetRole = "PRESENTER";
-    else if (linkInvite.guestToken === token) targetRole = "GUEST";
-    else return c.json({ message: "invalid token" }, 400);
+    let targetRole: "ORGANIZER" | "PRESENTER" | "GUEST" | "COMMITTEE" | undefined;
 
-  } else {
-    if (!role || !(role in roleMap)) return c.json({ message: "invalid role" }, 400);
-    if (!verifyInvite(eventId, user.id, role, sig)) return c.json({ message: "invalid signature" }, 400);
-    targetRole = roleMap[role];
-  }
+    if (token) {
+      const linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
+      if (!linkInvite) return c.json({ message: "invalid token" }, 400);
+
+      if (linkInvite.committeeToken === token) targetRole = "COMMITTEE";
+      else if (linkInvite.presenterToken === token) targetRole = "PRESENTER";
+      else if (linkInvite.guestToken === token) targetRole = "GUEST";
+      else return c.json({ message: "invalid token" }, 400);
+    } else {
+      if (!role || !(role in roleMap))
+        return c.json({ message: "invalid role" }, 400);
+      if (!sig || !verifyInvite(eventId, user.id, role, sig))
+        return c.json({ message: "invalid signature" }, 400);
+      targetRole = roleMap[role];
+    }
 
   if (!targetRole) return c.json({ message: "invalid role" }, 400);
 
@@ -833,9 +872,9 @@ eventsRoute.post("/:id/invite", async (c) => {
   return c.json({ message: "ok", participant: created });
 });
 
-eventsRoute.get("/:id/participants", async (c) => {
+eventsRoute.get("/:id/participants", zValidator("param", idParamSchema), async (c) => {
   const user = c.get("user");
-  const id = c.req.param("id");
+  const { id } = c.req.valid("param");
   const organizer = await prisma.eventParticipant.findFirst({
     where: { eventId: id, userId: user?.id, eventGroup: "ORGANIZER" },
   });
@@ -861,108 +900,113 @@ eventsRoute.get("/:id/participants", async (c) => {
   return c.json({ message: "ok", participants: participantsWithUsage });
 });
 
-eventsRoute.put("/:id/participants/:pid", async (c) => {
-  const user = c.get("user");
-  const id = c.req.param("id");
-  const pid = c.req.param("pid");
-  const organizer = await prisma.eventParticipant.findFirst({
-    where: { eventId: id, userId: user?.id, eventGroup: "ORGANIZER" },
-  });
-  if (!organizer) return c.json({ message: "Forbidden" }, 403);
-  const body = await c.req.json().catch(() => ({}));
-  const data: {
-    eventGroup?: "ORGANIZER" | "PRESENTER" | "COMMITTEE" | "GUEST";
-    isLeader?: boolean;
-    virtualReward?: number;
-    teamId?: string | null;
-  } = {};
-  const eg = body?.eventGroup;
-  if (eg && ["ORGANIZER", "PRESENTER", "COMMITTEE", "GUEST"].includes(eg)) {
-    data.eventGroup = eg;
-    
-    // Auto-update virtual reward based on role
-    const event = await prisma.event.findUnique({ where: { id } });
-    if (event) {
-      if (eg === "ORGANIZER" || eg === "PRESENTER") {
-        data.virtualReward = 0;
-      } else if (eg === "COMMITTEE") {
-        data.virtualReward = event.virtualRewardCommittee ?? 0;
-      } else if (eg === "GUEST") {
-        data.virtualReward = event.virtualRewardGuest ?? 0;
+eventsRoute.put(
+  "/:id/participants/:pid",
+  zValidator("json", updateParticipantSchema),
+  async (c) => {
+    const user = c.get("user");
+    const id = c.req.param("id");
+    const pid = c.req.param("pid");
+    const organizer = await prisma.eventParticipant.findFirst({
+      where: { eventId: id, userId: user?.id, eventGroup: "ORGANIZER" },
+    });
+    if (!organizer) return c.json({ message: "Forbidden" }, 403);
+    const body = c.req.valid("json");
+    const data: {
+      eventGroup?: "ORGANIZER" | "PRESENTER" | "COMMITTEE" | "GUEST";
+      isLeader?: boolean;
+      virtualReward?: number;
+      teamId?: string | null;
+    } = {};
+    const eg = body.eventGroup;
+    if (eg) {
+      data.eventGroup = eg;
+
+      // Auto-update virtual reward based on role
+      const event = await prisma.event.findUnique({ where: { id } });
+      if (event) {
+        if (eg === "ORGANIZER" || eg === "PRESENTER") {
+          data.virtualReward = 0;
+        } else if (eg === "COMMITTEE") {
+          data.virtualReward = event.virtualRewardCommittee ?? 0;
+        } else if (eg === "GUEST") {
+          data.virtualReward = event.virtualRewardGuest ?? 0;
+        }
       }
     }
-  }
-  
-  const existing = await prisma.eventParticipant.findFirst({ where: { id: pid, eventId: id } });
-  if (!existing) return c.json({ message: "Participant not found" }, 404);
 
-  // If role changes, reset scores/rewards given by this user
-  if (data.eventGroup && data.eventGroup !== existing.eventGroup) {
+    const existing = await prisma.eventParticipant.findFirst({ where: { id: pid, eventId: id } });
+    if (!existing) return c.json({ message: "Participant not found" }, 404);
+
+    // If role changes, reset scores/rewards given by this user
+    if (data.eventGroup && data.eventGroup !== existing.eventGroup) {
       // 1. Delete Virtual Rewards (TeamReward) given by this user in this event
       await prisma.teamReward.deleteMany({
-          where: {
-              eventId: id,
-              giverId: existing.userId
-          }
+        where: {
+          eventId: id,
+          giverId: existing.userId,
+        },
       });
 
       // 2. Delete Special Rewards (SpecialRewardVote) given by this committee (participant)
       // Note: SpecialRewardVote uses committeeId which is the participant ID
       await prisma.specialRewardVote.deleteMany({
-          where: {
-              committeeId: pid // pid is existing.id
-          }
+        where: {
+          committeeId: pid, // pid is existing.id
+        },
       });
-  }
+    }
 
-  if (typeof body?.isLeader === "boolean") data.isLeader = body.isLeader;
-  if (typeof body?.virtualReward === "number") data.virtualReward = Math.max(0, body.virtualReward);
-  if (body?.teamId === null) data.teamId = null;
-  else if (typeof body?.teamId === "string" && body.teamId.length > 0) data.teamId = body.teamId;
+    if (typeof body.isLeader === "boolean") data.isLeader = body.isLeader;
+    if (typeof body.virtualReward === "number")
+      data.virtualReward = Math.max(0, body.virtualReward);
+    if (body.teamId === null) data.teamId = null;
+    else if (body.teamId) data.teamId = body.teamId;
 
-  if (existing.eventGroup === "ORGANIZER") {
-    if (!organizer.isLeader) {
-      return c.json({ message: "Only organizer leader can manage organizer group" }, 403);
-    }
-    if (existing.userId === user?.id) {
-      return c.json({ message: "Organizer leader cannot manage self" }, 403);
-    }
-    if (typeof body?.isLeader === "boolean") {
-      return c.json({ message: "Cannot change organizer leader flag" }, 403);
-    }
-  } else {
-    if (!organizer.isLeader && body?.eventGroup === "ORGANIZER") {
-      return c.json({ message: "Only organizer leader can assign organizer role" }, 403);
-    }
-    // Handle leaving Presenter role with team logic
-    if (
-      existing.eventGroup === "PRESENTER" &&
-      data.eventGroup &&
-      data.eventGroup !== "PRESENTER" &&
-      existing.teamId
-    ) {
-      if (existing.isLeader) {
-        // Leader leaving: Delete team and remove all members from it
-        await prisma.eventParticipant.updateMany({
-          where: { teamId: existing.teamId },
-          data: { teamId: null, isLeader: false },
-        });
-        await prisma.team.delete({ where: { id: existing.teamId } });
-        data.teamId = null;
-        data.isLeader = false;
-      } else {
-        // Member leaving: Just remove from team
-        data.teamId = null;
+    if (existing.eventGroup === "ORGANIZER") {
+      if (!organizer.isLeader) {
+        return c.json({ message: "Only organizer leader can manage organizer group" }, 403);
+      }
+      if (existing.userId === user?.id) {
+        return c.json({ message: "Organizer leader cannot manage self" }, 403);
+      }
+      if (typeof body.isLeader === "boolean") {
+        return c.json({ message: "Cannot change organizer leader flag" }, 403);
+      }
+    } else {
+      if (!organizer.isLeader && body.eventGroup === "ORGANIZER") {
+        return c.json({ message: "Only organizer leader can assign organizer role" }, 403);
+      }
+      // Handle leaving Presenter role with team logic
+      if (
+        existing.eventGroup === "PRESENTER" &&
+        data.eventGroup &&
+        data.eventGroup !== "PRESENTER" &&
+        existing.teamId
+      ) {
+        if (existing.isLeader) {
+          // Leader leaving: Delete team and remove all members from it
+          await prisma.eventParticipant.updateMany({
+            where: { teamId: existing.teamId },
+            data: { teamId: null, isLeader: false },
+          });
+          await prisma.team.delete({ where: { id: existing.teamId } });
+          data.teamId = null;
+          data.isLeader = false;
+        } else {
+          // Member leaving: Just remove from team
+          data.teamId = null;
+        }
       }
     }
+    const updated = await prisma.eventParticipant.update({
+      where: { id: pid },
+      data,
+      include: { user: true, team: true },
+    });
+    return c.json({ message: "ok", participant: updated });
   }
-  const updated = await prisma.eventParticipant.update({
-    where: { id: pid },
-    data,
-    include: { user: true, team: true },
-  });
-  return c.json({ message: "ok", participant: updated });
-});
+);
 
 eventsRoute.delete("/:id/participants/:pid", async (c) => {
   const user = c.get("user");
@@ -984,32 +1028,38 @@ eventsRoute.delete("/:id/participants/:pid", async (c) => {
   return c.json({ message: "ok" });
 });
 
-eventsRoute.post("/:id/teams", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
+eventsRoute.post(
+  "/:id/teams",
+  zValidator("param", idParamSchema),
+  async (c) => {
+    const user = c.get("user");
+    const { id: eventId } = c.req.valid("param");
 
-  const contentType = c.req.header("content-type") || "";
-  let teamName: string | undefined;
-  let description: string | undefined;
-  let videoLink: string | undefined;
-  let imageCover: string | undefined;
+    const contentType = c.req.header("content-type") || "";
+  let dataToValidate: any = {};
   let file: File | undefined;
 
   if (contentType.includes("multipart/form-data")) {
     const form = await c.req.parseBody();
-    teamName = typeof form["teamName"] === "string" ? form["teamName"] : undefined;
-    description = typeof form["description"] === "string" ? form["description"] : undefined;
-    file = form["imageCover"] instanceof File ? (form["imageCover"] as File) : undefined;
+    dataToValidate = {
+      teamName: form["teamName"],
+      description: form["description"],
+      imageCover: typeof form["imageCover"] === "string" ? form["imageCover"] : undefined,
+    };
+    if (form["imageCover"] instanceof File) {
+      file = form["imageCover"] as File;
+    }
   } else {
-    const body = await c.req.json().catch(() => ({}));
-    teamName = body.teamName;
-    description = body.description;
-    imageCover = body.imageCover;
+    dataToValidate = await c.req.json().catch(() => ({}));
   }
 
-  if (!teamName || typeof teamName !== "string" || teamName.trim().length < 1) {
-    return c.json({ message: "Team name is required" }, 400);
+  const result = createTeamSchema.safeParse(dataToValidate);
+  if (!result.success) {
+    return c.json({ message: "Invalid input", errors: result.error }, 400);
   }
+
+  const { teamName, description } = result.data;
+  let { imageCover } = result.data;
 
   const participant = await prisma.eventParticipant.findFirst({
     where: { eventId, userId: user?.id },
@@ -1047,7 +1097,6 @@ eventsRoute.post("/:id/teams", async (c) => {
       eventId,
       teamName: teamName.trim(),
       description,
-      videoLink,
       imageCover,
     },
   });
@@ -1060,30 +1109,38 @@ eventsRoute.post("/:id/teams", async (c) => {
   return c.json({ message: "ok", team });
 });
 
-eventsRoute.put("/:id/teams/:teamId", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-  const teamId = c.req.param("teamId");
-  const contentType = c.req.header("content-type") || "";
-  let teamName: string | undefined;
-  let description: string | undefined;
-  let imageCover: string | undefined;
+eventsRoute.put(
+  "/:id/teams/:teamId",
+  zValidator("param", eventAndTeamIdParamSchema),
+  async (c) => {
+    const user = c.get("user");
+    const { id: eventId, teamId } = c.req.valid("param");
+    const contentType = c.req.header("content-type") || "";
+  let dataToValidate: any = {};
   let file: File | undefined;
 
   if (contentType.includes("multipart/form-data")) {
     const form = await c.req.parseBody();
-    teamName = typeof form["teamName"] === "string" ? form["teamName"] : undefined;
-    description = typeof form["description"] === "string" ? form["description"] : undefined;
-    file = form["imageCover"] instanceof File ? (form["imageCover"] as File) : undefined;
-    // Check if imageCover is sent as string (e.g. "null" or existing url)
-    if (typeof form["imageCover"] === "string") imageCover = form["imageCover"];
+    dataToValidate = {
+      teamName: form["teamName"],
+      description: form["description"],
+      imageCover: typeof form["imageCover"] === "string" ? form["imageCover"] : undefined,
+    };
+    if (form["imageCover"] instanceof File) {
+      file = form["imageCover"] as File;
+    }
   } else {
-    const body = await c.req.json().catch(() => ({}));
-    teamName = body.teamName;
-    description = body.description;
-    imageCover = body.imageCover;
+    dataToValidate = await c.req.json().catch(() => ({}));
   }
-  
+
+  const result = updateTeamSchema.safeParse(dataToValidate);
+  if (!result.success) {
+    return c.json({ message: "Invalid input", errors: result.error }, 400);
+  }
+
+  const { teamName, description } = result.data;
+  let { imageCover } = result.data;
+
   const participant = await prisma.eventParticipant.findFirst({
     where: { eventId, userId: user?.id },
   });
@@ -1111,9 +1168,9 @@ eventsRoute.put("/:id/teams/:teamId", async (c) => {
   }
 
   const data: any = {};
-  if (typeof teamName === "string" && teamName.trim().length > 0) data.teamName = teamName.trim();
-  if (typeof description === "string") data.description = description;
-  if (typeof imageCover === "string") data.imageCover = imageCover === "null" ? null : imageCover;
+  if (teamName) data.teamName = teamName.trim();
+  if (description !== undefined) data.description = description;
+  if (imageCover !== undefined) data.imageCover = imageCover === "null" ? null : imageCover;
 
   const team = await prisma.team.update({
     where: { id: teamId },
@@ -1123,27 +1180,31 @@ eventsRoute.put("/:id/teams/:teamId", async (c) => {
   return c.json({ message: "ok", team });
 });
 
-eventsRoute.get("/:id/presenters/candidates", async (c) => {
-  const eventId = c.req.param("id");
-  const q = c.req.query("q") || "";
+eventsRoute.get(
+  "/:id/presenters/candidates",
+  zValidator("param", idParamSchema),
+  zValidator("query", candidateQuerySchema),
+  async (c) => {
+    const { id: eventId } = c.req.valid("param");
+    const { q } = c.req.valid("query");
 
-  if (q.length < 2) return c.json({ message: "ok", candidates: [] });
+    if (!q || q.length < 2) return c.json({ message: "ok", candidates: [] });
 
-  const candidates = await prisma.eventParticipant.findMany({
-    where: {
-      eventId,
-      eventGroup: "PRESENTER",
-      teamId: null,
-      user: {
-        OR: [
-          { name: { contains: q } }, // Case insensitive usually depends on DB collation, or use mode: 'insensitive' for Postgres
-          { username: { contains: q } },
-        ],
+    const candidates = await prisma.eventParticipant.findMany({
+      where: {
+        eventId,
+        eventGroup: "PRESENTER",
+        teamId: null,
+        user: {
+          OR: [
+            { name: { contains: q } }, // Case insensitive usually depends on DB collation, or use mode: 'insensitive' for Postgres
+            { username: { contains: q } },
+          ],
+        },
       },
-    },
-    include: { user: true },
-    take: 10,
-  });
+      include: { user: true },
+      take: 10,
+    });
 
   return c.json({
     message: "ok",
@@ -1157,15 +1218,18 @@ eventsRoute.get("/:id/presenters/candidates", async (c) => {
   });
 });
 
-eventsRoute.post("/:id/teams/:teamId/members", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-  const teamId = c.req.param("teamId");
-  const { userId } = await c.req.json();
+eventsRoute.post(
+  "/:id/teams/:teamId/members",
+  zValidator("param", eventAndTeamIdParamSchema),
+  zValidator("json", addTeamMemberSchema),
+  async (c) => {
+    const user = c.get("user");
+    const { id: eventId, teamId } = c.req.valid("param");
+    const { userId } = c.req.valid("json");
 
-  const requester = await prisma.eventParticipant.findFirst({
-    where: { eventId, userId: user?.id },
-  });
+    const requester = await prisma.eventParticipant.findFirst({
+      where: { eventId, userId: user?.id },
+    });
 
   if (!requester || requester.teamId !== teamId) {
     return c.json({ message: "Forbidden" }, 403);
@@ -1204,12 +1268,14 @@ eventsRoute.post("/:id/teams/:teamId/members", async (c) => {
   return c.json({ message: "ok" });
 });
 
-eventsRoute.get("/:id/teams/:teamId/comments", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-  const teamId = c.req.param("teamId");
+eventsRoute.get(
+  "/:id/teams/:teamId/comments",
+  zValidator("param", eventAndTeamIdParamSchema),
+  async (c) => {
+    const user = c.get("user");
+    const { id: eventId, teamId } = c.req.valid("param");
 
-  if (!user) return c.json({ message: "Unauthorized" }, 401);
+    if (!user) return c.json({ message: "Unauthorized" }, 401);
 
   const participant = await prisma.eventParticipant.findFirst({
     where: { eventId, userId: user.id },
@@ -1289,12 +1355,14 @@ eventsRoute.get("/:id/teams/:teamId/comments", async (c) => {
   return c.json({ message: "ok", comments: formattedComments });
 });
 
-eventsRoute.get("/:id/teams/:teamId", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-  const teamId = c.req.param("teamId");
+eventsRoute.get(
+  "/:id/teams/:teamId",
+  zValidator("param", eventAndTeamIdParamSchema),
+  async (c) => {
+    const user = c.get("user");
+    const { id: eventId, teamId } = c.req.valid("param");
 
-  try {
+    try {
     const team = await prisma.team.findUnique({
       where: { id: teamId },
       include: {

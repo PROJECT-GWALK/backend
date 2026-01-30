@@ -1095,6 +1095,15 @@ eventsRoute.post(
   const event = await prisma.event.findUnique({ where: { id: eventId } });
   if (!event) return c.json({ message: "Event not found" }, 404);
 
+  // Check submission period
+  const now = new Date();
+  if (event.startJoinDate && now < event.startJoinDate) {
+    return c.json({ message: "Not in submission period" }, 400);
+  }
+  if (event.endJoinDate && now > event.endJoinDate) {
+    return c.json({ message: "Submission period has ended" }, 400);
+  }
+
   if (event.maxTeams) {
     const currentTeams = await prisma.team.count({ where: { eventId } });
     if (currentTeams >= event.maxTeams) {
@@ -1175,6 +1184,18 @@ eventsRoute.put(
 
   if (!isTeamLeader) {
     return c.json({ message: "Forbidden" }, 403);
+  }
+
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+
+  // Check submission period
+  const now = new Date();
+  if (event.startJoinDate && now < event.startJoinDate) {
+    return c.json({ message: "Not in submission period" }, 400);
+  }
+  if (event.endJoinDate && now > event.endJoinDate) {
+    return c.json({ message: "Submission period has ended" }, 400);
   }
 
   if (file) {
@@ -1264,6 +1285,15 @@ eventsRoute.post(
 
   const event = await prisma.event.findUnique({ where: { id: eventId } });
   if (!event) return c.json({ message: "Event not found" }, 404);
+
+  // Check submission period
+  const now = new Date();
+  if (event.startJoinDate && now < event.startJoinDate) {
+    return c.json({ message: "Not in submission period" }, 400);
+  }
+  if (event.endJoinDate && now > event.endJoinDate) {
+    return c.json({ message: "Submission period has ended" }, 400);
+  }
 
   if (event.maxTeamMembers !== null && event.maxTeamMembers !== undefined) {
     const currentMembers = await prisma.eventParticipant.count({
@@ -1637,6 +1667,18 @@ eventsRoute.delete("/:id/teams/:teamId/members/:userId", async (c) => {
 
   if (!requester || requester.teamId !== teamId) {
     return c.json({ message: "Forbidden" }, 403);
+  }
+
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+
+  // Check submission period
+  const now = new Date();
+  if (event.startJoinDate && now < event.startJoinDate) {
+    return c.json({ message: "Not in submission period" }, 400);
+  }
+  if (event.endJoinDate && now > event.endJoinDate) {
+    return c.json({ message: "Submission period has ended" }, 400);
   }
 
   if (!requester.isLeader && user?.id !== targetUserId) {

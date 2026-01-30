@@ -37,10 +37,17 @@ eventsActionRoute.put(
       userId: user.id,
       eventGroup: { in: ["GUEST", "COMMITTEE"] },
     },
+    include: { event: true },
   });
 
   if (!participant) {
     return c.json({ message: "You are not a participant (Guest/Committee) in this event" }, 403);
+  }
+
+  // Check if event is active
+  const now = new Date();
+  if (!participant.event.startView || !participant.event.endView || now < participant.event.startView || now > participant.event.endView) {
+      return c.json({ message: "Event is not active" }, 400);
   }
 
   // 2. Check if project (Team) exists in this event
@@ -145,10 +152,17 @@ eventsActionRoute.post(
       userId: user.id,
       eventGroup: { in: ["GUEST", "COMMITTEE"] },
     },
+    include: { event: true },
   });
 
   if (!participant) {
     return c.json({ message: "You are not a participant" }, 403);
+  }
+
+  // Check if event is active
+  const now = new Date();
+  if (!participant.event.startView || !participant.event.endView || now < participant.event.startView || now > participant.event.endView) {
+      return c.json({ message: "Event is not active" }, 400);
   }
 
   // Find total rewards given by user to this project
@@ -224,10 +238,17 @@ eventsActionRoute.put(
       userId: user.id,
       eventGroup: "COMMITTEE",
     },
+    include: { event: true },
   });
 
   if (!participant) {
     return c.json({ message: "You are not a committee member in this event" }, 403);
+  }
+
+  // Check if event is active
+  const now = new Date();
+  if (!participant.event.startView || !participant.event.endView || now < participant.event.startView || now > participant.event.endView) {
+      return c.json({ message: "Event is not active" }, 400);
   }
 
   const team = await prisma.team.findFirst({
@@ -333,10 +354,17 @@ eventsActionRoute.post(
       userId: user.id,
       eventGroup: "COMMITTEE",
     },
+    include: { event: true },
   });
 
   if (!participant) {
     return c.json({ message: "You are not a committee member in this event" }, 403);
+  }
+
+  // Check if event is active
+  const now = new Date();
+  if (!participant.event.startView || !participant.event.endView || now < participant.event.startView || now > participant.event.endView) {
+      return c.json({ message: "Event is not active" }, 400);
   }
 
   try {
@@ -373,10 +401,17 @@ eventsActionRoute.post(
       userId: user.id,
       eventGroup: { in: ["GUEST", "COMMITTEE"] },
     },
+    include: { event: true },
   });
 
   if (!participant) {
     return c.json({ message: "You are not a participant (Guest/Committee) in this event" }, 403);
+  }
+
+  // Check if event is active
+  const now = new Date();
+  if (!participant.event.startView || !participant.event.endView || now < participant.event.startView || now > participant.event.endView) {
+      return c.json({ message: "Event is not active" }, 400);
   }
 
   const team = await prisma.team.findFirst({
@@ -436,10 +471,17 @@ eventsActionRoute.put(
       eventId: eventId,
       userId: user.id,
     },
+    include: { event: true },
   });
 
   if (!participant) {
     return c.json({ message: "You are not a participant in this event" }, 403);
+  }
+
+  // Check if event is active
+  const now = new Date();
+  if (!participant.event.startView || !participant.event.endView || now < participant.event.startView || now > participant.event.endView) {
+      return c.json({ message: "Event is not active" }, 400);
   }
 
   if (participant.eventGroup === "ORGANIZER") {

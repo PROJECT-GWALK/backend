@@ -30,8 +30,13 @@ eventsRoute.use("*", async (c, next) => {
   const path = c.req.path;
   const method = c.req.method;
   
-  // Allow optional auth for GET /api/events/:id (UUID)
-  if (method === "GET" && /\/api\/events\/[0-9a-fA-F-]{36}$/.test(path)) {
+  // Allow optional auth for GET /api/events/:id (UUID) and GET /api/events
+  if (method === "GET" && (
+    /\/api\/events\/[0-9a-fA-F-]{36}$/.test(path) ||
+    path.endsWith("/api/events") ||
+    path.endsWith("/api/events/") ||
+    /\/api\/events\/user\/.*\/history$/.test(path)
+  )) {
     return optionalAuthMiddleware(c, next);
   }
   
@@ -58,6 +63,8 @@ function verifyInvite(eventId: string, userId: string, role: keyof typeof roleMa
 
 eventsRoute.get("/", async (c) => {
   const user = c.get("user");
+  // Use a dummy UUID if user is not logged in to prevent fetching all participants
+  const userId = user?.id || "00000000-0000-0000-0000-000000000000";
   const events = await prisma.event.findMany({
     where: { status: "PUBLISHED" , publicView: true },
     orderBy: { createdAt: "desc" },
@@ -72,8 +79,8 @@ eventsRoute.get("/", async (c) => {
       startJoinDate: true,
       endJoinDate: true,
       publicView: true,
-      participants: { where: { userId: user?.id }, select: { eventGroup: true, isLeader: true } },
-      ratings: { where: { userId: user?.id }, select: { rating: true } },
+      participants: { where: { userId }, select: { eventGroup: true, isLeader: true } },
+      ratings: { where: { userId }, select: { rating: true } },
     },
   });
   const payload = events.map((e) => ({
@@ -244,6 +251,167 @@ eventsRoute.get("/me/history", async (c) => {
   const organized = await prisma.eventParticipant.findMany({
     where: {
       userId: user?.id,
+      eventGroup: "ORGANIZER",
+      event: {
+        status: "PUBLISHED",
+      },
+    },
+    include: {
+      event: {
+        include: {
+          ratings: true,
+        },
+      },
+    },
+    orderBy: {
+      event: { createdAt: "desc" },
+    },
+  });
+
+  const organizedData = organized
+    .map((p) => {
+      const isFinished = p.event.endView ? p.event.endView < now : false;
+      if (!isFinished) return null;
+
+      const ratings = p.event.ratings;
+      const avgRating =
+        ratings.length > 0
+          ? (ratings.reduce((a, b) => a + b.rating, 0) / ratings.length).toFixed(1)
+          : "-";
+
+      return {
+        eventId: p.event.id,
+        eventName: p.event.eventName,
+        rating: avgRating,
+      };
+    })
+    .filter((e) => e !== null);
+
+  return c.json({
+    message: "ok",
+    participated: participatedData.filter((e) => e !== null),
+    organized: organizedData,
+  });
+});
+
+eventsRoute.get("/user/:username/history", async (c) => {
+  let username = c.req.param("username");
+  if (username.startsWith("@")) username = username.substring(1);
+
+  const targetUser = await prisma.user.findFirst({ where: { username } });
+  if (!targetUser) return c.json({ message: "User not found" }, 404);
+
+  const userId = targetUser.id;
+  const now = new Date();
+
+  // 1. Participated (Presenter, Guest, Committee)
+  const participated = await prisma.eventParticipant.findMany({
+    where: {
+      userId: userId,
+      eventGroup: { not: "ORGANIZER" },
+      event: {
+        status: "PUBLISHED",
+      },
+    },
+    include: {
+      event: true,
+      team: {
+        include: {
+          rankings: true,
+        },
+      },
+    },
+    orderBy: {
+      event: { createdAt: "desc" },
+    },
+  });
+
+  const participatedData = await Promise.all(
+    participated.map(async (p) => {
+      const eventId = p.eventId;
+      const teamId = p.teamId;
+      const isFinished = p.event.endView ? p.event.endView < now : false;
+
+      if (!isFinished) return null;
+
+      // Calculate Special Rewards won by this team
+      let specialRewardsWon: { name: string; image: string | null; description: string | null }[] = [];
+      if (teamId) {
+        const rewards = await prisma.specialReward.findMany({
+          where: { eventId },
+          include: { votes: true },
+        });
+
+        for (const r of rewards) {
+          const voteCounts: Record<string, number> = {};
+          r.votes.forEach((v) => {
+            voteCounts[v.teamId] = (voteCounts[v.teamId] || 0) + 1;
+          });
+
+          let maxVotes = 0;
+          let winnerTeamId = null;
+          for (const [tid, count] of Object.entries(voteCounts)) {
+            if (count > maxVotes) {
+              maxVotes = count;
+              winnerTeamId = tid;
+            }
+          }
+
+          if (winnerTeamId === teamId && maxVotes > 0) {
+            specialRewardsWon.push({
+              name: r.name,
+              image: r.image,
+              description: r.description,
+            });
+          }
+        }
+      }
+
+      let rank = p.team?.rankings.find((r) => r.eventId === eventId)?.rank;
+
+      if (!rank && teamId) {
+        const allTeams = await prisma.team.findMany({
+          where: { eventId },
+          include: { rewards: true },
+        });
+
+        const scores = allTeams.map((t) => ({
+          id: t.id,
+          score: t.rewards.reduce((acc, r) => acc + r.reward, 0),
+        }));
+
+        scores.sort((a, b) => b.score - a.score);
+
+        const index = scores.findIndex((t) => t.id === teamId);
+        if (index !== -1) rank = index + 1;
+      }
+
+      const userRating = await prisma.eventRating.findUnique({
+        where: {
+          eventId_userId: {
+            userId: userId,
+            eventId: p.eventId,
+          },
+        },
+      });
+
+      return {
+        eventId: p.event.id,
+        eventName: p.event.eventName,
+        teamId: p.team?.id,
+        teamName: p.team?.teamName || "-",
+        place: rank ? rank.toString() : "-",
+        specialReward: specialRewardsWon.map((r) => r.name).join(", "),
+        specialRewards: specialRewardsWon,
+        userRating: userRating ? userRating.rating : null,
+      };
+    })
+  );
+
+  // 2. Organized
+  const organized = await prisma.eventParticipant.findMany({
+    where: {
+      userId: userId,
       eventGroup: "ORGANIZER",
       event: {
         status: "PUBLISHED",

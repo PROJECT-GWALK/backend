@@ -29,17 +29,18 @@ eventsRoute.route("/:eventId/action", eventsActionRoute);
 eventsRoute.use("*", async (c, next) => {
   const path = c.req.path;
   const method = c.req.method;
-  
+
   // Allow optional auth for GET /api/events/:id (UUID) and GET /api/events
-  if (method === "GET" && (
-    /\/api\/events\/[0-9a-fA-F-]{36}$/.test(path) ||
-    path.endsWith("/api/events") ||
-    path.endsWith("/api/events/") ||
-    /\/api\/events\/user\/.*\/history$/.test(path)
-  )) {
+  if (
+    method === "GET" &&
+    (/\/api\/events\/[0-9a-fA-F-]{36}$/.test(path) ||
+      path.endsWith("/api/events") ||
+      path.endsWith("/api/events/") ||
+      /\/api\/events\/user\/.*\/history$/.test(path))
+  ) {
     return optionalAuthMiddleware(c, next);
   }
-  
+
   return authMiddleware(c as any, next);
 });
 
@@ -66,7 +67,7 @@ eventsRoute.get("/", async (c) => {
   // Use a dummy UUID if user is not logged in to prevent fetching all participants
   const userId = user?.id || "00000000-0000-0000-0000-000000000000";
   const events = await prisma.event.findMany({
-    where: { status: "PUBLISHED" , publicView: true },
+    where: { status: "PUBLISHED", publicView: true },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
@@ -79,25 +80,38 @@ eventsRoute.get("/", async (c) => {
       startJoinDate: true,
       endJoinDate: true,
       publicView: true,
-      participants: { where: { userId }, select: { eventGroup: true, isLeader: true } },
+      participants: {
+        select: {
+          userId: true,
+          eventGroup: true,
+          isLeader: true,
+          user: { select: { name: true, image: true } },
+        },
+      },
       ratings: { where: { userId }, select: { rating: true } },
     },
   });
-  const payload = events.map((e) => ({
-    id: e.id,
-    eventName: e.eventName,
-    status: e.status,
-    createdAt: e.createdAt,
-    imageCover: e.imageCover,
-    startView: e.startView,
-    endView: e.endView,
-    startJoinDate: e.startJoinDate,
-    endJoinDate: e.endJoinDate,
-    publicView: e.publicView,
-    role: e.participants?.[0]?.eventGroup || null,
-    isLeader: e.participants?.[0]?.isLeader || false,
-    userRating: e.ratings?.[0]?.rating || null,
-  }));
+  const payload = events.map((e) => {
+    const currentUserParticipant = e.participants.find((p) => p.userId === userId);
+    const organizer = e.participants.find((p) => p.eventGroup === "ORGANIZER");
+    return {
+      id: e.id,
+      eventName: e.eventName,
+      status: e.status,
+      createdAt: e.createdAt,
+      imageCover: e.imageCover,
+      startView: e.startView,
+      endView: e.endView,
+      startJoinDate: e.startJoinDate,
+      endJoinDate: e.endJoinDate,
+      publicView: e.publicView,
+      role: currentUserParticipant?.eventGroup || null,
+      isLeader: currentUserParticipant?.isLeader || false,
+      userRating: e.ratings?.[0]?.rating || null,
+      organizerName: organizer?.user?.name || null,
+      organizerImage: organizer?.user?.image || null,
+    };
+  });
   return c.json({ message: "ok", events: payload });
 });
 
@@ -174,7 +188,8 @@ eventsRoute.get("/me/history", async (c) => {
       if (!isFinished) return null;
 
       // Calculate Special Rewards won by this team
-      let specialRewardsWon: { name: string; image: string | null; description: string | null }[] = [];
+      let specialRewardsWon: { name: string; image: string | null; description: string | null }[] =
+        [];
       if (teamId) {
         const rewards = await prisma.specialReward.findMany({
           where: { eventId },
@@ -244,7 +259,7 @@ eventsRoute.get("/me/history", async (c) => {
         specialRewards: specialRewardsWon,
         userRating: userRating ? userRating.rating : null,
       };
-    })
+    }),
   );
 
   // 2. Organized
@@ -335,7 +350,8 @@ eventsRoute.get("/user/:username/history", async (c) => {
       if (!isFinished) return null;
 
       // Calculate Special Rewards won by this team
-      let specialRewardsWon: { name: string; image: string | null; description: string | null }[] = [];
+      let specialRewardsWon: { name: string; image: string | null; description: string | null }[] =
+        [];
       if (teamId) {
         const rewards = await prisma.specialReward.findMany({
           where: { eventId },
@@ -405,7 +421,7 @@ eventsRoute.get("/user/:username/history", async (c) => {
         specialRewards: specialRewardsWon,
         userRating: userRating ? userRating.rating : null,
       };
-    })
+    }),
   );
 
   // 2. Organized
@@ -576,7 +592,7 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
       where: { eventId: id, userId: user.id, eventGroup: "ORGANIZER" },
     });
     if (!organizer) return c.json({ message: "Forbidden" }, 403);
-  } 
+  }
   // For non-public events, only participants can view
   else if (!event.publicView) {
     if (!user) return c.json({ message: "Forbidden" }, 403);
@@ -655,10 +671,10 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
   const committeeFeedbackCount = await prisma.committeeFeedback.count({
     where: { eventId: id },
   });
-  
+
   // Special Rewards
   const specialPrizeCount = event.specialRewards.length;
-  
+
   // Count total votes for stats (regardless of who voted)
   const allVotes = await prisma.specialRewardVote.findMany({
     where: { reward: { eventId: id } },
@@ -702,30 +718,30 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
   let awardsUnused: typeof event.specialRewards = [];
   if (user) {
     const myVotes = await prisma.specialRewardVote.findMany({
-      where: { 
+      where: {
         reward: { eventId: id },
-        committeeId: myParticipant?.id 
+        committeeId: myParticipant?.id,
       },
       select: { rewardId: true },
     });
-    
+
     if (myParticipant) {
-       // Re-fetch votes using the participant ID
-       const myRealVotes = await prisma.specialRewardVote.findMany({
-         where: {
-            committeeId: myParticipant.id
-         },
-         select: { rewardId: true }
-       });
-       
-       // Filter out rewards already voted for
-       const votedRewardIds = new Set(myRealVotes.map((v) => v.rewardId));
-       awardsUnused = event.specialRewards.filter((r) => !votedRewardIds.has(r.id));
+      // Re-fetch votes using the participant ID
+      const myRealVotes = await prisma.specialRewardVote.findMany({
+        where: {
+          committeeId: myParticipant.id,
+        },
+        select: { rewardId: true },
+      });
+
+      // Filter out rewards already voted for
+      const votedRewardIds = new Set(myRealVotes.map((v) => v.rewardId));
+      awardsUnused = event.specialRewards.filter((r) => !votedRewardIds.has(r.id));
     } else {
-       awardsUnused = event.specialRewards;
+      awardsUnused = event.specialRewards;
     }
   } else {
-     awardsUnused = event.specialRewards;
+    awardsUnused = event.specialRewards;
   }
 
   const presenterTeams = await prisma.team.count({ where: { eventId: id } });
@@ -867,15 +883,14 @@ eventsRoute.get(
 
     if (!user) return c.json({ message: "Unauthorized" }, 401);
     const event = await prisma.event.findUnique({ where: { id: eventId } });
-    if (!event || event.status !== "PUBLISHED")
-      return c.json({ message: "Event not found" }, 404);
+    if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
     const existing = await prisma.eventParticipant.findFirst({
       where: { eventId, userId: user.id },
     });
     if (existing) return c.json({ message: "Already joined" }, 400);
     const sig = signInvite(eventId, user.id, role);
     return c.json({ message: "ok", sig });
-  }
+  },
 );
 
 eventsRoute.get(
@@ -887,8 +902,7 @@ eventsRoute.get(
     const { role } = c.req.valid("query");
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
-    if (!event || event.status !== "PUBLISHED")
-      return c.json({ message: "Event not found" }, 404);
+    if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
 
     let linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
     if (!linkInvite) {
@@ -903,7 +917,7 @@ eventsRoute.get(
     else if (role === "guest") token = linkInvite.guestToken;
 
     return c.json({ message: "ok", token });
-  }
+  },
 );
 
 eventsRoute.post(
@@ -915,8 +929,7 @@ eventsRoute.post(
     const { role } = c.req.valid("query");
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
-    if (!event || event.status !== "PUBLISHED")
-      return c.json({ message: "Event not found" }, 404);
+    if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
 
     // Check if user is an organizer
     const organizer = await prisma.eventParticipant.findFirst({
@@ -947,7 +960,7 @@ eventsRoute.post(
     else if (role === "guest") token = updatedLinkInvite.guestToken;
 
     return c.json({ message: "ok", token });
-  }
+  },
 );
 
 // Preview invite (no auth required). Returns role if the token/role is valid for this event.
@@ -960,8 +973,7 @@ eventsRoute.get(
     const { token, role: roleParam } = c.req.valid("query");
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
-    if (!event || event.status !== "PUBLISHED")
-      return c.json({ message: "Event not found" }, 404);
+    if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
 
     if (token) {
       const linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
@@ -976,10 +988,9 @@ eventsRoute.get(
       return c.json({ message: "ok", role: role });
     }
 
-    if (!roleParam || !(roleParam in roleMap))
-      return c.json({ message: "invalid role" }, 400);
+    if (!roleParam || !(roleParam in roleMap)) return c.json({ message: "invalid role" }, 400);
     return c.json({ message: "ok", role: roleParam });
-  }
+  },
 );
 
 eventsRoute.post(
@@ -992,8 +1003,7 @@ eventsRoute.post(
     const { token, role, sig } = c.req.valid("query");
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
-    if (!event || event.status !== "PUBLISHED")
-      return c.json({ message: "Event not found" }, 404);
+    if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
     if (!user) return c.json({ message: "Unauthorized" }, 401);
 
     const existing = await prisma.eventParticipant.findFirst({
@@ -1012,55 +1022,55 @@ eventsRoute.post(
       else if (linkInvite.guestToken === token) targetRole = "GUEST";
       else return c.json({ message: "invalid token" }, 400);
     } else {
-      if (!role || !(role in roleMap))
-        return c.json({ message: "invalid role" }, 400);
+      if (!role || !(role in roleMap)) return c.json({ message: "invalid role" }, 400);
       if (!sig || !verifyInvite(eventId, user.id, role, sig))
         return c.json({ message: "invalid signature" }, 400);
       targetRole = roleMap[role];
     }
 
-  if (!targetRole) return c.json({ message: "invalid role" }, 400);
+    if (!targetRole) return c.json({ message: "invalid role" }, 400);
 
-  // Check period based on resolved targetRole
-  if (targetRole === "PRESENTER") {
-    const now = new Date();
-    if (event.startJoinDate && now < event.startJoinDate) {
-      return c.json({ message: "Not in joining period" }, 400);
-    }
-    if (event.endJoinDate && now > event.endJoinDate) {
-      return c.json({ message: "Joining period has ended" }, 400);
-    }
-  } else if (targetRole === "GUEST") {
-    const now = new Date();
-    if (event.startView && now < event.startView) {
-      // Allow if in viewSoon (after endJoinDate but before startView)
-      if (!event.endJoinDate || now <= event.endJoinDate) {
-        return c.json({ message: "Not in view period" }, 400);
+    // Check period based on resolved targetRole
+    if (targetRole === "PRESENTER") {
+      const now = new Date();
+      if (event.startJoinDate && now < event.startJoinDate) {
+        return c.json({ message: "Not in joining period" }, 400);
+      }
+      if (event.endJoinDate && now > event.endJoinDate) {
+        return c.json({ message: "Joining period has ended" }, 400);
+      }
+    } else if (targetRole === "GUEST") {
+      const now = new Date();
+      if (event.startView && now < event.startView) {
+        // Allow if in viewSoon (after endJoinDate but before startView)
+        if (!event.endJoinDate || now <= event.endJoinDate) {
+          return c.json({ message: "Not in view period" }, 400);
+        }
+      }
+      if (event.endView && now > event.endView) {
+        return c.json({ message: "View period has ended" }, 400);
       }
     }
-    if (event.endView && now > event.endView) {
-      return c.json({ message: "View period has ended" }, 400);
+
+    let virtualReward = 0;
+    if (targetRole === "COMMITTEE") {
+      virtualReward = event.virtualRewardCommittee ?? 0;
+    } else if (targetRole === "GUEST") {
+      virtualReward = event.virtualRewardGuest ?? 0;
     }
-  }
 
-  let virtualReward = 0;
-  if (targetRole === "COMMITTEE") {
-    virtualReward = event.virtualRewardCommittee ?? 0;
-  } else if (targetRole === "GUEST") {
-    virtualReward = event.virtualRewardGuest ?? 0;
-  }
-
-  const created = await prisma.eventParticipant.create({
-    data: {
-      eventId,
-      userId: user.id,
-      eventGroup: targetRole,
-      isLeader: false,
-      virtualReward,
-    },
-  });
-  return c.json({ message: "ok", participant: created });
-});
+    const created = await prisma.eventParticipant.create({
+      data: {
+        eventId,
+        userId: user.id,
+        eventGroup: targetRole,
+        isLeader: false,
+        virtualReward,
+      },
+    });
+    return c.json({ message: "ok", participant: created });
+  },
+);
 
 eventsRoute.get("/:id/participants", zValidator("param", idParamSchema), async (c) => {
   const user = c.get("user");
@@ -1195,7 +1205,7 @@ eventsRoute.put(
       include: { user: true, team: true },
     });
     return c.json({ message: "ok", participant: updated });
-  }
+  },
 );
 
 eventsRoute.delete("/:id/participants/:pid", async (c) => {
@@ -1209,7 +1219,8 @@ eventsRoute.delete("/:id/participants/:pid", async (c) => {
   const existing = await prisma.eventParticipant.findFirst({ where: { id: pid, eventId: id } });
   if (!existing) return c.json({ message: "Participant not found" }, 404);
   if (existing.eventGroup === "ORGANIZER") {
-    if (!organizer.isLeader) return c.json({ message: "Only organizer leader can delete organizer" }, 403);
+    if (!organizer.isLeader)
+      return c.json({ message: "Only organizer leader can delete organizer" }, 403);
     if (existing.userId === user?.id) {
       return c.json({ message: "Organizer leader cannot delete self" }, 403);
     }
@@ -1218,14 +1229,11 @@ eventsRoute.delete("/:id/participants/:pid", async (c) => {
   return c.json({ message: "ok" });
 });
 
-eventsRoute.post(
-  "/:id/teams",
-  zValidator("param", idParamSchema),
-  async (c) => {
-    const user = c.get("user");
-    const { id: eventId } = c.req.valid("param");
+eventsRoute.post("/:id/teams", zValidator("param", idParamSchema), async (c) => {
+  const user = c.get("user");
+  const { id: eventId } = c.req.valid("param");
 
-    const contentType = c.req.header("content-type") || "";
+  const contentType = c.req.header("content-type") || "";
   let dataToValidate: any = {};
   let file: File | undefined;
 
@@ -1308,13 +1316,10 @@ eventsRoute.post(
   return c.json({ message: "ok", team });
 });
 
-eventsRoute.put(
-  "/:id/teams/:teamId",
-  zValidator("param", eventAndTeamIdParamSchema),
-  async (c) => {
-    const user = c.get("user");
-    const { id: eventId, teamId } = c.req.valid("param");
-    const contentType = c.req.header("content-type") || "";
+eventsRoute.put("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSchema), async (c) => {
+  const user = c.get("user");
+  const { id: eventId, teamId } = c.req.valid("param");
+  const contentType = c.req.header("content-type") || "";
   let dataToValidate: any = {};
   let file: File | undefined;
 
@@ -1417,17 +1422,18 @@ eventsRoute.get(
       take: 10,
     });
 
-  return c.json({
-    message: "ok",
-    candidates: candidates.map((c) => ({
-      id: c.id,
-      userId: c.userId,
-      name: c.user.name,
-      username: c.user.username,
-      image: c.user.image,
-    })),
-  });
-});
+    return c.json({
+      message: "ok",
+      candidates: candidates.map((c) => ({
+        id: c.id,
+        userId: c.userId,
+        name: c.user.name,
+        username: c.user.username,
+        image: c.user.image,
+      })),
+    });
+  },
+);
 
 eventsRoute.post(
   "/:id/teams/:teamId/members",
@@ -1442,51 +1448,53 @@ eventsRoute.post(
       where: { eventId, userId: user?.id },
     });
 
-  if (!requester || requester.teamId !== teamId) {
-    return c.json({ message: "Forbidden" }, 403);
-  }
-
-  // Only leader can add members
-  if (!requester.isLeader) {
-    return c.json({ message: "Only leader can add members" }, 403);
-  }
-
-  const event = await prisma.event.findUnique({ where: { id: eventId } });
-  if (!event) return c.json({ message: "Event not found" }, 404);
-
-  // Check submission period
-  const now = new Date();
-  if (event.startJoinDate && now < event.startJoinDate) {
-    return c.json({ message: "Not in submission period" }, 400);
-  }
-  if (event.endJoinDate && now > event.endJoinDate) {
-    return c.json({ message: "Submission period has ended" }, 400);
-  }
-
-  if (event.maxTeamMembers !== null && event.maxTeamMembers !== undefined) {
-    const currentMembers = await prisma.eventParticipant.count({
-      where: { teamId },
-    });
-    if (currentMembers >= event.maxTeamMembers) {
-      return c.json({ message: "Max team members reached" }, 400);
+    if (!requester || requester.teamId !== teamId) {
+      return c.json({ message: "Forbidden" }, 403);
     }
-  }
 
-  const target = await prisma.eventParticipant.findFirst({
-    where: { eventId, userId: userId },
-  });
+    // Only leader can add members
+    if (!requester.isLeader) {
+      return c.json({ message: "Only leader can add members" }, 403);
+    }
 
-  if (!target) return c.json({ message: "User not found in event" }, 404);
-  if (target.teamId) return c.json({ message: "User already in a team" }, 400);
-  if (target.eventGroup !== "PRESENTER") return c.json({ message: "User is not a presenter" }, 400);
+    const event = await prisma.event.findUnique({ where: { id: eventId } });
+    if (!event) return c.json({ message: "Event not found" }, 404);
 
-  await prisma.eventParticipant.update({
-    where: { id: target.id },
-    data: { teamId },
-  });
+    // Check submission period
+    const now = new Date();
+    if (event.startJoinDate && now < event.startJoinDate) {
+      return c.json({ message: "Not in submission period" }, 400);
+    }
+    if (event.endJoinDate && now > event.endJoinDate) {
+      return c.json({ message: "Submission period has ended" }, 400);
+    }
 
-  return c.json({ message: "ok" });
-});
+    if (event.maxTeamMembers !== null && event.maxTeamMembers !== undefined) {
+      const currentMembers = await prisma.eventParticipant.count({
+        where: { teamId },
+      });
+      if (currentMembers >= event.maxTeamMembers) {
+        return c.json({ message: "Max team members reached" }, 400);
+      }
+    }
+
+    const target = await prisma.eventParticipant.findFirst({
+      where: { eventId, userId: userId },
+    });
+
+    if (!target) return c.json({ message: "User not found in event" }, 404);
+    if (target.teamId) return c.json({ message: "User already in a team" }, 400);
+    if (target.eventGroup !== "PRESENTER")
+      return c.json({ message: "User is not a presenter" }, 400);
+
+    await prisma.eventParticipant.update({
+      where: { id: target.id },
+      data: { teamId },
+    });
+
+    return c.json({ message: "ok" });
+  },
+);
 
 eventsRoute.get(
   "/:id/teams/:teamId/comments",
@@ -1497,92 +1505,90 @@ eventsRoute.get(
 
     if (!user) return c.json({ message: "Unauthorized" }, 401);
 
-  const participant = await prisma.eventParticipant.findFirst({
-    where: { eventId, userId: user.id },
-    include: { team: true },
-  });
-
-  if (!participant) return c.json({ message: "Forbidden" }, 403);
-
-  let comments: any[] = [];
-
-  // 1. Team Members & Organizer see all comments from Committee/Guest
-  if (participant.teamId === teamId || participant.eventGroup === "ORGANIZER") {
-    comments = await prisma.comment.findMany({
-      where: {
-        eventId,
-        teamId,
-        user: {
-          participants: {
-            some: {
-              eventId,
-              eventGroup: { in: ["COMMITTEE", "GUEST"] },
-            },
-          },
-        },
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
-            participants: {
-              where: { eventId },
-              select: { eventGroup: true },
-            },
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
+    const participant = await prisma.eventParticipant.findFirst({
+      where: { eventId, userId: user.id },
+      include: { team: true },
     });
-  } else if (["COMMITTEE", "GUEST"].includes(participant.eventGroup || "")) {
-    // 2. Committee/Guest see only their own comment
-    comments = await prisma.comment.findMany({
-      where: {
-        eventId,
-        teamId,
-        userId: user.id,
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            image: true,
+
+    if (!participant) return c.json({ message: "Forbidden" }, 403);
+
+    let comments: any[] = [];
+
+    // 1. Team Members & Organizer see all comments from Committee/Guest
+    if (participant.teamId === teamId || participant.eventGroup === "ORGANIZER") {
+      comments = await prisma.comment.findMany({
+        where: {
+          eventId,
+          teamId,
+          user: {
             participants: {
-              where: { eventId },
-              select: { eventGroup: true },
+              some: {
+                eventId,
+                eventGroup: { in: ["COMMITTEE", "GUEST"] },
+              },
             },
           },
         },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              image: true,
+              participants: {
+                where: { eventId },
+                select: { eventGroup: true },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+    } else if (["COMMITTEE", "GUEST"].includes(participant.eventGroup || "")) {
+      // 2. Committee/Guest see only their own comment
+      comments = await prisma.comment.findMany({
+        where: {
+          eventId,
+          teamId,
+          userId: user.id,
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              image: true,
+              participants: {
+                where: { eventId },
+                select: { eventGroup: true },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    const formattedComments = comments.map((comment) => ({
+      id: comment.id,
+      content: comment.content,
+      createdAt: comment.createdAt,
+      user: {
+        id: comment.user.id,
+        name: comment.user.name,
+        image: comment.user.image,
+        role: comment.user.participants[0]?.eventGroup || "UNKNOWN",
       },
-    });
-  }
+    }));
 
-  const formattedComments = comments.map((comment) => ({
-    id: comment.id,
-    content: comment.content,
-    createdAt: comment.createdAt,
-    user: {
-      id: comment.user.id,
-      name: comment.user.name,
-      image: comment.user.image,
-      role: comment.user.participants[0]?.eventGroup || "UNKNOWN",
-    },
-  }));
+    return c.json({ message: "ok", comments: formattedComments });
+  },
+);
 
-  return c.json({ message: "ok", comments: formattedComments });
-});
+eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSchema), async (c) => {
+  const user = c.get("user");
+  const { id: eventId, teamId } = c.req.valid("param");
 
-eventsRoute.get(
-  "/:id/teams/:teamId",
-  zValidator("param", eventAndTeamIdParamSchema),
-  async (c) => {
-    const user = c.get("user");
-    const { id: eventId, teamId } = c.req.valid("param");
-
-    try {
+  try {
     const team = await prisma.team.findUnique({
       where: { id: teamId },
       include: {
@@ -1601,45 +1607,45 @@ eventsRoute.get(
     let myComment = "";
 
     if (user) {
-        const reward = await prisma.teamReward.findFirst({
-            where: { eventId, teamId, giverId: user.id }
-        });
-        if (reward) myReward = reward.reward;
+      const reward = await prisma.teamReward.findFirst({
+        where: { eventId, teamId, giverId: user.id },
+      });
+      if (reward) myReward = reward.reward;
 
-        const myParticipant = await prisma.eventParticipant.findFirst({
-            where: { eventId, userId: user.id, eventGroup: "COMMITTEE" }
-        });
+      const myParticipant = await prisma.eventParticipant.findFirst({
+        where: { eventId, userId: user.id, eventGroup: "COMMITTEE" },
+      });
 
-        if (myParticipant) {
-            const myVotes = await prisma.specialRewardVote.findMany({
-                where: { committeeId: myParticipant.id, teamId },
-                select: { rewardId: true }
-            });
-            mySpecialRewards = myVotes.map(v => v.rewardId);
-        }
-
-        const comment = await prisma.comment.findFirst({
-            where: { eventId, teamId, userId: user.id }
+      if (myParticipant) {
+        const myVotes = await prisma.specialRewardVote.findMany({
+          where: { committeeId: myParticipant.id, teamId },
+          select: { rewardId: true },
         });
-        if (comment) myComment = comment.content;
+        mySpecialRewards = myVotes.map((v) => v.rewardId);
+      }
+
+      const comment = await prisma.comment.findFirst({
+        where: { eventId, teamId, userId: user.id },
+      });
+      if (comment) myComment = comment.content;
     }
 
     // Get Total VR
     const totalReward = await prisma.teamReward.aggregate({
-        where: { eventId, teamId },
-        _sum: { reward: true }
+      where: { eventId, teamId },
+      _sum: { reward: true },
     });
     const totalVr = totalReward._sum.reward || 0;
 
-    return c.json({ 
-        message: "ok", 
-        team: {
-            ...team,
-            totalVr,
-            myReward,
-            mySpecialRewards,
-            myComment
-        } 
+    return c.json({
+      message: "ok",
+      team: {
+        ...team,
+        totalVr,
+        myReward,
+        mySpecialRewards,
+        myComment,
+      },
     });
   } catch (error) {
     console.error("Error fetching team:", error);
@@ -1657,11 +1663,11 @@ eventsRoute.delete("/:id/teams/:teamId", async (c) => {
   });
   // Only leader can delete
   if (!participant || participant.teamId !== teamId || !participant.isLeader) {
-     // Or organizer?
-     const organizer = await prisma.eventParticipant.findFirst({
-        where: { eventId, userId: user?.id, eventGroup: "ORGANIZER" },
-     });
-     if (!organizer) return c.json({ message: "Forbidden" }, 403);
+    // Or organizer?
+    const organizer = await prisma.eventParticipant.findFirst({
+      where: { eventId, userId: user?.id, eventGroup: "ORGANIZER" },
+    });
+    if (!organizer) return c.json({ message: "Forbidden" }, 403);
   }
 
   // Unlink participants first to prevent cascade delete
@@ -1712,21 +1718,21 @@ eventsRoute.get("/:id/teams", async (c) => {
     });
 
     const myParticipant = await prisma.eventParticipant.findFirst({
-        where: { eventId, userId: user.id, eventGroup: "COMMITTEE" }
+      where: { eventId, userId: user.id, eventGroup: "COMMITTEE" },
     });
 
     if (myParticipant) {
-        const myVotes = await prisma.specialRewardVote.findMany({
-            where: { committeeId: myParticipant.id },
-            include: { reward: true }
-        });
-        myVotes.forEach(v => {
-            if (v.teamId) {
-                const existing = mySpecialRewardsMap.get(v.teamId) || [];
-                existing.push(v.reward.id); // Use ID for easier frontend matching
-                mySpecialRewardsMap.set(v.teamId, existing);
-            }
-        });
+      const myVotes = await prisma.specialRewardVote.findMany({
+        where: { committeeId: myParticipant.id },
+        include: { reward: true },
+      });
+      myVotes.forEach((v) => {
+        if (v.teamId) {
+          const existing = mySpecialRewardsMap.get(v.teamId) || [];
+          existing.push(v.reward.id); // Use ID for easier frontend matching
+          mySpecialRewardsMap.set(v.teamId, existing);
+        }
+      });
     }
   }
 
@@ -1862,7 +1868,7 @@ eventsRoute.delete("/:id/teams/:teamId/members/:userId", async (c) => {
   }
 
   if (target.isLeader) {
-     return c.json({ message: "Cannot remove leader" }, 400);
+    return c.json({ message: "Cannot remove leader" }, 400);
   }
 
   await prisma.eventParticipant.update({
@@ -1952,11 +1958,15 @@ eventsRoute.put("/:id", async (c) => {
     }
 
     data.eventName = newName ?? event.eventName;
-    if (typeof form["eventDescription"] === "string") data.eventDescription = form["eventDescription"] as string;
-    if (typeof form["locationName"] === "string") data.locationName = form["locationName"] as string;
+    if (typeof form["eventDescription"] === "string")
+      data.eventDescription = form["eventDescription"] as string;
+    if (typeof form["locationName"] === "string")
+      data.locationName = form["locationName"] as string;
     if (typeof form["location"] === "string") data.location = form["location"] as string;
-    if (typeof form["publicView"] === "string") data.publicView = (form["publicView"] as string) === "true";
-    if (typeof form["hasCommittee"] === "string") data.hasCommittee = (form["hasCommittee"] as string) === "true";
+    if (typeof form["publicView"] === "string")
+      data.publicView = (form["publicView"] as string) === "true";
+    if (typeof form["hasCommittee"] === "string")
+      data.hasCommittee = (form["hasCommittee"] as string) === "true";
     if (typeof form["currentStep"] === "string") {
       const cs = parseInt(form["currentStep"] as string);
       if (!Number.isNaN(cs)) data.currentStep = cs;
@@ -2031,14 +2041,22 @@ eventsRoute.put("/:id", async (c) => {
       endView: body.endView ? new Date(body.endView) : event.endView,
       startJoinDate: body.startJoinDate ? new Date(body.startJoinDate) : event.startJoinDate,
       endJoinDate: body.endJoinDate ? new Date(body.endJoinDate) : event.endJoinDate,
-      maxTeamMembers: typeof body.maxTeamMembers === "number" ? body.maxTeamMembers : event.maxTeamMembers,
+      maxTeamMembers:
+        typeof body.maxTeamMembers === "number" ? body.maxTeamMembers : event.maxTeamMembers,
       maxTeams: typeof body.maxTeams === "number" ? body.maxTeams : event.maxTeams,
-      virtualRewardGuest: typeof body.virtualRewardGuest === "number" ? body.virtualRewardGuest : event.virtualRewardGuest,
-      virtualRewardCommittee: typeof body.virtualRewardCommittee === "number" ? body.virtualRewardCommittee : event.virtualRewardCommittee,
+      virtualRewardGuest:
+        typeof body.virtualRewardGuest === "number"
+          ? body.virtualRewardGuest
+          : event.virtualRewardGuest,
+      virtualRewardCommittee:
+        typeof body.virtualRewardCommittee === "number"
+          ? body.virtualRewardCommittee
+          : event.virtualRewardCommittee,
       hasCommittee: typeof body.hasCommittee === "boolean" ? body.hasCommittee : event.hasCommittee,
       unitReward: typeof body.unitReward === "string" ? body.unitReward : event.unitReward,
     } as any;
-    if ("imageCover" in body) (data as any).imageCover = body.imageCover === "null" ? null : body.imageCover;
+    if ("imageCover" in body)
+      (data as any).imageCover = body.imageCover === "null" ? null : body.imageCover;
   }
 
   // Handle fileTypes sync
@@ -2058,9 +2076,14 @@ eventsRoute.put("/:id", async (c) => {
   }
 
   if (fileTypesData) {
-    const current = await prisma.eventFileType.findMany({ where: { eventId: id }, select: { id: true } });
+    const current = await prisma.eventFileType.findMany({
+      where: { eventId: id },
+      select: { id: true },
+    });
     const currentIds = current.map((c) => c.id);
-    const incomingIds = fileTypesData.filter((f: any) => f.id && currentIds.includes(f.id)).map((f: any) => f.id);
+    const incomingIds = fileTypesData
+      .filter((f: any) => f.id && currentIds.includes(f.id))
+      .map((f: any) => f.id);
 
     const toDelete = currentIds.filter((cid) => !incomingIds.includes(cid));
     const toUpdate = fileTypesData.filter((f: any) => f.id && currentIds.includes(f.id));
@@ -2077,7 +2100,7 @@ eventsRoute.put("/:id", async (c) => {
             allowedFileTypes: f.allowedFileTypes,
             isRequired: f.isRequired,
           },
-        })
+        }),
       ),
       prisma.eventFileType.createMany({
         data: toCreate.map((f: any) => ({
@@ -2094,11 +2117,16 @@ eventsRoute.put("/:id", async (c) => {
   const sv = ("startView" in data ? (data as any).startView : event.startView) as Date | null;
   const ev = ("endView" in data ? (data as any).endView : event.endView) as Date | null;
   if (sv && ev && sv > ev) return c.json({ message: "View period invalid: start after end" }, 400);
-  const sj = ("startJoinDate" in data ? (data as any).startJoinDate : event.startJoinDate) as Date | null;
+  const sj = (
+    "startJoinDate" in data ? (data as any).startJoinDate : event.startJoinDate
+  ) as Date | null;
   const ej = ("endJoinDate" in data ? (data as any).endJoinDate : event.endJoinDate) as Date | null;
-  if (sj && ej && sj > ej) return c.json({ message: "Submit period invalid: start after end" }, 400);
-  if (sj && sv && sj >= sv) return c.json({ message: "Submission start must be before event start" }, 400);
-  if (ej && sv && ej >= sv) return c.json({ message: "Submission end must be before event start" }, 400);
+  if (sj && ej && sj > ej)
+    return c.json({ message: "Submit period invalid: start after end" }, 400);
+  if (sj && sv && sj >= sv)
+    return c.json({ message: "Submission start must be before event start" }, 400);
+  if (ej && sv && ej >= sv)
+    return c.json({ message: "Submission end must be before event start" }, 400);
 
   const updated = await prisma.event.update({ where: { id }, data });
 

@@ -24,7 +24,11 @@ eventsActionRoute.put(
   async (c) => {
     const user = c.get("user");
     const eventId = c.req.param("eventId");
-    const { projectId, amount } = c.req.valid("json");
+    const { projectId, amount, categories } = c.req.valid("json") as {
+      projectId: string;
+      amount?: number;
+      categories?: { categoryId: string; amount: number }[];
+    };
 
     if (!eventId) {
       return c.json({ message: "Invalid input" }, 400);
@@ -65,7 +69,51 @@ eventsActionRoute.put(
   // 3. Transaction
   try {
     const result = await prisma.$transaction(async (tx) => {
-      // Check total usage against limit
+      const usingCategories = Array.isArray(categories);
+      const normalizedCategories = usingCategories
+        ? categories.reduce(
+            (acc, r) => {
+              const categoryId = String(r.categoryId || "").trim();
+              const rawAmount = typeof r.amount === "number" ? r.amount : 0;
+              const nextAmount = Math.max(0, Math.floor(rawAmount));
+              if (!categoryId) return acc;
+              acc.set(categoryId, (acc.get(categoryId) || 0) + nextAmount);
+              return acc;
+            },
+            new Map<string, number>(),
+          )
+        : null;
+      const totalAmount = usingCategories
+        ? Array.from(normalizedCategories?.values() || []).reduce((sum, n) => sum + n, 0)
+        : typeof amount === "number"
+          ? Math.max(0, Math.floor(amount))
+          : 0;
+
+      if (usingCategories) {
+        const categoryIds = Array.from(normalizedCategories?.keys() || []);
+        const existingCategories = await tx.vrCategory.findMany({
+          where: { eventId: eventId, id: { in: categoryIds } },
+          select: { id: true },
+        });
+        if (existingCategories.length !== categoryIds.length) {
+          throw new Error("Some categories not found or invalid");
+        }
+      } else {
+        if (typeof amount !== "number") {
+          throw new Error("Invalid input");
+        }
+      }
+
+      if (participant.event.vrTeamCapEnabled) {
+        const cap =
+          participant.eventGroup === "COMMITTEE"
+            ? participant.event.vrTeamCapCommittee
+            : participant.event.vrTeamCapGuest;
+        if (typeof cap === "number" && totalAmount > cap) {
+          throw new Error("Exceeds VR per-team limit");
+        }
+      }
+
       const otherRewards = await tx.teamReward.aggregate({
         where: {
           eventId: eventId,
@@ -76,49 +124,108 @@ eventsActionRoute.put(
           reward: true,
         },
       });
+      const otherCategoryRewards = await tx.teamRewardCategory.aggregate({
+        where: {
+          eventId: eventId,
+          giverId: user.id,
+          teamId: { not: projectId },
+        },
+        _sum: { amount: true },
+      });
 
-      const totalUsedOthers = otherRewards._sum.reward || 0;
-      const newTotalUsed = totalUsedOthers + amount;
+      const totalUsedOthers = (otherRewards._sum.reward || 0) + (otherCategoryRewards._sum.amount || 0);
+      const thisTeamCategoryRewards = usingCategories
+        ? 0
+        : (
+            await tx.teamRewardCategory.aggregate({
+              where: { eventId: eventId, teamId: projectId, giverId: user.id },
+              _sum: { amount: true },
+            })
+          )._sum.amount || 0;
+
+      const newTotalUsed = totalUsedOthers + thisTeamCategoryRewards + totalAmount;
 
       if (newTotalUsed > participant.virtualReward) {
         throw new Error("Insufficient VR balance");
       }
 
-      // Find existing reward for this team
-      const existingReward = await tx.teamReward.findFirst({
-        where: {
-          eventId: eventId,
-          teamId: projectId,
-          giverId: user.id,
-        },
-      });
+      if (usingCategories) {
+        await tx.teamRewardCategory.deleteMany({
+          where: { eventId: eventId, teamId: projectId, giverId: user.id },
+        });
 
-      // Update or Create Reward
-      if (existingReward) {
-        if (amount === 0) {
-            await tx.teamReward.delete({
-                where: { id: existingReward.id }
-            });
-        } else {
-            await tx.teamReward.update({
-                where: { id: existingReward.id },
-                data: { reward: amount },
-            });
+        const rows = Array.from(normalizedCategories?.entries() || [])
+          .filter(([, amt]) => amt > 0)
+          .map(([categoryId, amt]) => ({
+            eventId: eventId,
+            teamId: projectId,
+            giverId: user.id,
+            categoryId,
+            amount: amt,
+          }));
+
+        if (rows.length > 0) {
+          await tx.teamRewardCategory.createMany({ data: rows });
         }
-      } else {
-        if (amount > 0) {
-          await tx.teamReward.create({
-            data: {
-              eventId: eventId,
-              teamId: projectId,
-              giverId: user.id,
-              reward: amount,
-            },
-          });
-        }
+
+        await tx.teamReward.deleteMany({
+          where: { eventId: eventId, teamId: projectId, giverId: user.id },
+        });
+
+        const usedRewards = await tx.teamReward.aggregate({
+          where: { eventId: eventId, giverId: user.id },
+          _sum: { reward: true },
+        });
+        const usedCategoryRewards = await tx.teamRewardCategory.aggregate({
+          where: { eventId: eventId, giverId: user.id },
+          _sum: { amount: true },
+        });
+
+        return {
+          totalLimit: participant.virtualReward,
+          totalUsed: (usedRewards._sum.reward || 0) + (usedCategoryRewards._sum.amount || 0),
+        };
       }
 
-      return { totalLimit: participant.virtualReward, totalUsed: newTotalUsed };
+      const existingReward = await tx.teamReward.findFirst({
+        where: { eventId: eventId, teamId: projectId, giverId: user.id },
+      });
+
+      if (existingReward) {
+        if (totalAmount === 0) {
+          await tx.teamReward.delete({
+            where: { id: existingReward.id },
+          });
+        } else {
+          await tx.teamReward.update({
+            where: { id: existingReward.id },
+            data: { reward: totalAmount },
+          });
+        }
+      } else if (totalAmount > 0) {
+        await tx.teamReward.create({
+          data: {
+            eventId: eventId,
+            teamId: projectId,
+            giverId: user.id,
+            reward: totalAmount,
+          },
+        });
+      }
+
+      const usedRewards = await tx.teamReward.aggregate({
+        where: { eventId: eventId, giverId: user.id },
+        _sum: { reward: true },
+      });
+      const usedCategoryRewards = await tx.teamRewardCategory.aggregate({
+        where: { eventId: eventId, giverId: user.id },
+        _sum: { amount: true },
+      });
+
+      return {
+        totalLimit: participant.virtualReward,
+        totalUsed: (usedRewards._sum.reward || 0) + (usedCategoryRewards._sum.amount || 0),
+      };
     });
 
     return c.json({
@@ -128,7 +235,14 @@ eventsActionRoute.put(
     });
   } catch (error: any) {
     console.error("Error updating VR:", error);
-    const status = error.message === "Insufficient VR balance" ? 400 : 500;
+    const status = [
+      "Insufficient VR balance",
+      "Exceeds VR per-team limit",
+      "Some categories not found or invalid",
+      "Invalid input",
+    ].includes(error.message)
+      ? 400
+      : 500;
     return c.json({ message: error.message || "Internal server error" }, status);
   }
 });
@@ -165,19 +279,16 @@ eventsActionRoute.post(
       return c.json({ message: "Event is not active" }, 400);
   }
 
-  // Find total rewards given by user to this project
   const rewards = await prisma.teamReward.aggregate({
-    where: {
-      eventId,
-      teamId: projectId,
-      giverId: user.id,
-    },
-    _sum: {
-      reward: true,
-    },
+    where: { eventId, teamId: projectId, giverId: user.id },
+    _sum: { reward: true },
+  });
+  const categoryRewards = await prisma.teamRewardCategory.aggregate({
+    where: { eventId, teamId: projectId, giverId: user.id },
+    _sum: { amount: true },
   });
 
-  const totalGiven = rewards._sum.reward || 0;
+  const totalGiven = (rewards._sum.reward || 0) + (categoryRewards._sum.amount || 0);
 
   if (totalGiven === 0) {
     return c.json({ message: "No VR to refund", newBalance: participant.virtualReward });
@@ -185,6 +296,14 @@ eventsActionRoute.post(
 
   try {
     const result = await prisma.$transaction(async (tx) => {
+      await tx.teamRewardCategory.deleteMany({
+        where: {
+          eventId,
+          teamId: projectId,
+          giverId: user.id,
+        },
+      });
+
       // Delete rewards for this team
       await tx.teamReward.deleteMany({
         where: {
@@ -194,16 +313,17 @@ eventsActionRoute.post(
         },
       });
 
-      // Calculate remaining usage
       const remainingRewards = await tx.teamReward.aggregate({
-        where: {
-            eventId,
-            giverId: user.id,
-        },
-        _sum: { reward: true }
+        where: { eventId, giverId: user.id },
+        _sum: { reward: true },
       });
-      
-      const totalUsed = remainingRewards._sum.reward || 0;
+      const remainingCategoryRewards = await tx.teamRewardCategory.aggregate({
+        where: { eventId, giverId: user.id },
+        _sum: { amount: true },
+      });
+
+      const totalUsed =
+        (remainingRewards._sum.reward || 0) + (remainingCategoryRewards._sum.amount || 0);
 
       return { totalLimit: participant.virtualReward, totalUsed };
     });

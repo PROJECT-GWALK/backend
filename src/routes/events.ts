@@ -226,12 +226,14 @@ eventsRoute.get("/me/history", async (c) => {
       if (!rank && teamId) {
         const allTeams = await prisma.team.findMany({
           where: { eventId },
-          include: { rewards: true },
+          include: { rewards: true, categoryRewards: true },
         });
 
         const scores = allTeams.map((t) => ({
           id: t.id,
-          score: t.rewards.reduce((acc, r) => acc + r.reward, 0),
+          score:
+            t.rewards.reduce((acc, r) => acc + r.reward, 0) +
+            t.categoryRewards.reduce((acc, r) => acc + r.amount, 0),
         }));
 
         scores.sort((a, b) => b.score - a.score);
@@ -388,12 +390,14 @@ eventsRoute.get("/user/:username/history", async (c) => {
       if (!rank && teamId) {
         const allTeams = await prisma.team.findMany({
           where: { eventId },
-          include: { rewards: true },
+          include: { rewards: true, categoryRewards: true },
         });
 
         const scores = allTeams.map((t) => ({
           id: t.id,
-          score: t.rewards.reduce((acc, r) => acc + r.reward, 0),
+          score:
+            t.rewards.reduce((acc, r) => acc + r.reward, 0) +
+            t.categoryRewards.reduce((acc, r) => acc + r.amount, 0),
         }));
 
         scores.sort((a, b) => b.score - a.score);
@@ -496,12 +500,14 @@ eventsRoute.get("/:id/presenter/stats", async (c) => {
   // 2. Calculate Rank & Score
   const allTeams = await prisma.team.findMany({
     where: { eventId },
-    include: { rewards: true },
+    include: { rewards: true, categoryRewards: true },
   });
 
   const teamScores = allTeams.map((t) => ({
     id: t.id,
-    score: t.rewards.reduce((acc, r) => acc + r.reward, 0),
+    score:
+      t.rewards.reduce((acc, r) => acc + r.reward, 0) +
+      t.categoryRewards.reduce((acc, r) => acc + r.amount, 0),
   }));
 
   // Sort descending
@@ -579,6 +585,7 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
     where: { id },
     include: {
       fileTypes: true,
+      vrCategories: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
       specialRewards: true,
       participants: { include: { user: true, team: { include: { files: true } } } },
     },
@@ -632,18 +639,31 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
     _sum: { reward: true },
   });
 
+  const categoryRewardsAgg = await prisma.teamRewardCategory.groupBy({
+    by: ["giverId"],
+    where: { eventId: id },
+    _sum: { amount: true },
+  });
+
   let participantsVirtualUsed = 0;
   let committeeVirtualUsed = 0;
   let vrUsed = 0;
   let myVirtualUsed = 0;
 
+  const usedByGiver = new Map<string, number>();
   rewardsAgg.forEach((r) => {
-    const amount = r._sum.reward || 0;
+    usedByGiver.set(r.giverId, (usedByGiver.get(r.giverId) || 0) + (r._sum.reward || 0));
+  });
+  categoryRewardsAgg.forEach((r) => {
+    usedByGiver.set(r.giverId, (usedByGiver.get(r.giverId) || 0) + (r._sum.amount || 0));
+  });
+
+  usedByGiver.forEach((amount, giverId) => {
     vrUsed += amount;
-    const role = userRoleMap.get(r.giverId);
+    const role = userRoleMap.get(giverId);
     if (role === "GUEST") participantsVirtualUsed += amount;
     if (role === "COMMITTEE") committeeVirtualUsed += amount;
-    if (user && r.giverId === user.id) myVirtualUsed = amount;
+    if (user && giverId === user.id) myVirtualUsed = amount;
   });
 
   // Comments / Opinions
@@ -810,11 +830,14 @@ eventsRoute.get("/:id/rankings", async (c) => {
     where: { eventId },
     include: {
       rewards: true,
+      categoryRewards: true,
     },
   });
 
   const teamScores = teams.map((team) => {
-    const totalReward = team.rewards.reduce((sum, r) => sum + r.reward, 0);
+    const totalReward =
+      team.rewards.reduce((sum, r) => sum + r.reward, 0) +
+      team.categoryRewards.reduce((sum, r) => sum + r.amount, 0);
     return {
       id: team.id,
       name: team.teamName,
@@ -1090,7 +1113,17 @@ eventsRoute.get("/:id/participants", zValidator("param", idParamSchema), async (
     _sum: { reward: true },
   });
 
-  const rewardMap = new Map(rewards.map((r) => [r.giverId, r._sum.reward || 0]));
+  const categoryRewards = await prisma.teamRewardCategory.groupBy({
+    by: ["giverId"],
+    where: { eventId: id },
+    _sum: { amount: true },
+  });
+
+  const rewardMap = new Map<string, number>();
+  rewards.forEach((r) => rewardMap.set(r.giverId, (rewardMap.get(r.giverId) || 0) + (r._sum.reward || 0)));
+  categoryRewards.forEach((r) =>
+    rewardMap.set(r.giverId, (rewardMap.get(r.giverId) || 0) + (r._sum.amount || 0)),
+  );
 
   const participantsWithUsage = participants.map((p) => ({
     ...p,
@@ -1142,6 +1175,13 @@ eventsRoute.put(
     if (data.eventGroup && data.eventGroup !== existing.eventGroup) {
       // 1. Delete Virtual Rewards (TeamReward) given by this user in this event
       await prisma.teamReward.deleteMany({
+        where: {
+          eventId: id,
+          giverId: existing.userId,
+        },
+      });
+
+      await prisma.teamRewardCategory.deleteMany({
         where: {
           eventId: id,
           giverId: existing.userId,
@@ -1605,12 +1645,19 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
     let myReward = 0;
     let mySpecialRewards: string[] = [];
     let myComment = "";
+    let myCategoryRewards: { categoryId: string; amount: number }[] = [];
 
     if (user) {
       const reward = await prisma.teamReward.findFirst({
         where: { eventId, teamId, giverId: user.id },
       });
       if (reward) myReward = reward.reward;
+
+      const categoryRewards = await prisma.teamRewardCategory.findMany({
+        where: { eventId, teamId, giverId: user.id },
+        select: { categoryId: true, amount: true },
+      });
+      myCategoryRewards = categoryRewards;
 
       const myParticipant = await prisma.eventParticipant.findFirst({
         where: { eventId, userId: user.id, eventGroup: "COMMITTEE" },
@@ -1635,7 +1682,27 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
       where: { eventId, teamId },
       _sum: { reward: true },
     });
-    const totalVr = totalReward._sum.reward || 0;
+    const totalCategoryReward = await prisma.teamRewardCategory.aggregate({
+      where: { eventId, teamId },
+      _sum: { amount: true },
+    });
+    const totalVr = (totalReward._sum.reward || 0) + (totalCategoryReward._sum.amount || 0);
+
+    const vrCategories = await prisma.vrCategory.findMany({
+      where: { eventId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+
+    const categoryTotalsAgg = await prisma.teamRewardCategory.groupBy({
+      by: ["categoryId"],
+      where: { eventId, teamId },
+      _sum: { amount: true },
+    });
+
+    const categoryTotals = categoryTotalsAgg.map((r) => ({
+      categoryId: r.categoryId,
+      total: r._sum.amount || 0,
+    }));
 
     return c.json({
       message: "ok",
@@ -1643,6 +1710,9 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
         ...team,
         totalVr,
         myReward,
+        myCategoryRewards,
+        vrCategories,
+        categoryTotals,
         mySpecialRewards,
         myComment,
       },
@@ -1700,13 +1770,21 @@ eventsRoute.get("/:id/teams", async (c) => {
     _sum: { reward: true },
   });
 
-  const rewardMap = new Map<string, number>();
-  rewards.forEach((r) => {
-    rewardMap.set(r.teamId, r._sum.reward || 0);
+  const categoryRewards = await prisma.teamRewardCategory.groupBy({
+    by: ["teamId"],
+    where: { eventId },
+    _sum: { amount: true },
   });
+
+  const rewardMap = new Map<string, number>();
+  rewards.forEach((r) => rewardMap.set(r.teamId, (rewardMap.get(r.teamId) || 0) + (r._sum.reward || 0)));
+  categoryRewards.forEach((r) =>
+    rewardMap.set(r.teamId, (rewardMap.get(r.teamId) || 0) + (r._sum.amount || 0)),
+  );
 
   const user = c.get("user");
   const myRewardsMap = new Map<string, number>();
+  const myCategoryRewardsMap = new Map<string, number>();
   const mySpecialRewardsMap = new Map<string, string[]>();
 
   if (user) {
@@ -1715,6 +1793,15 @@ eventsRoute.get("/:id/teams", async (c) => {
     });
     myRewards.forEach((r) => {
       myRewardsMap.set(r.teamId, r.reward);
+    });
+
+    const myCategoryRewards = await prisma.teamRewardCategory.groupBy({
+      by: ["teamId"],
+      where: { eventId, giverId: user.id },
+      _sum: { amount: true },
+    });
+    myCategoryRewards.forEach((r) => {
+      myCategoryRewardsMap.set(r.teamId, r._sum.amount || 0);
     });
 
     const myParticipant = await prisma.eventParticipant.findFirst({
@@ -1739,7 +1826,7 @@ eventsRoute.get("/:id/teams", async (c) => {
   const teamsWithVr = teams.map((t) => ({
     ...t,
     totalVr: rewardMap.get(t.id) || 0,
-    myReward: myRewardsMap.get(t.id) || 0,
+    myReward: (myRewardsMap.get(t.id) || 0) + (myCategoryRewardsMap.get(t.id) || 0),
     mySpecialRewards: mySpecialRewardsMap.get(t.id) || [],
   }));
 
@@ -1995,6 +2082,17 @@ eventsRoute.put("/:id", async (c) => {
       const n = parseInt(form["virtualRewardCommittee"] as string);
       if (!Number.isNaN(n)) data.virtualRewardCommittee = n;
     }
+    if (typeof form["vrTeamCapEnabled"] === "string") {
+      data.vrTeamCapEnabled = (form["vrTeamCapEnabled"] as string) === "true";
+    }
+    if (typeof form["vrTeamCapGuest"] === "string") {
+      const n = parseInt(form["vrTeamCapGuest"] as string);
+      if (!Number.isNaN(n)) data.vrTeamCapGuest = n;
+    }
+    if (typeof form["vrTeamCapCommittee"] === "string") {
+      const n = parseInt(form["vrTeamCapCommittee"] as string);
+      if (!Number.isNaN(n)) data.vrTeamCapCommittee = n;
+    }
     if (typeof form["unitReward"] === "string") {
       data.unitReward = String(form["unitReward"]);
     }
@@ -2052,6 +2150,16 @@ eventsRoute.put("/:id", async (c) => {
         typeof body.virtualRewardCommittee === "number"
           ? body.virtualRewardCommittee
           : event.virtualRewardCommittee,
+      vrTeamCapEnabled:
+        typeof body.vrTeamCapEnabled === "boolean"
+          ? body.vrTeamCapEnabled
+          : event.vrTeamCapEnabled,
+      vrTeamCapGuest:
+        typeof body.vrTeamCapGuest === "number" ? body.vrTeamCapGuest : event.vrTeamCapGuest,
+      vrTeamCapCommittee:
+        typeof body.vrTeamCapCommittee === "number"
+          ? body.vrTeamCapCommittee
+          : event.vrTeamCapCommittee,
       hasCommittee: typeof body.hasCommittee === "boolean" ? body.hasCommittee : event.hasCommittee,
       unitReward: typeof body.unitReward === "string" ? body.unitReward : event.unitReward,
     } as any;
@@ -2161,6 +2269,110 @@ eventsRoute.put("/:id/public-view", async (c) => {
   if (typeof pv === "undefined") return c.json({ message: "publicView is required" }, 400);
   const updated = await prisma.event.update({ where: { id }, data: { publicView: pv } });
   return c.json({ message: "ok", event: updated });
+});
+
+eventsRoute.get("/:id/vr-categories", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+
+  if (event.status === "DRAFT") {
+    if (!user) return c.json({ message: "Forbidden" }, 403);
+    const organizer = await prisma.eventParticipant.findFirst({
+      where: { eventId, userId: user.id, eventGroup: "ORGANIZER" },
+    });
+    if (!organizer) return c.json({ message: "Forbidden" }, 403);
+  } else if (!event.publicView) {
+    if (!user) return c.json({ message: "Forbidden" }, 403);
+    const participant = await prisma.eventParticipant.findFirst({
+      where: { eventId, userId: user.id },
+    });
+    if (!participant) return c.json({ message: "Forbidden" }, 403);
+  }
+
+  const categories = await prisma.vrCategory.findMany({
+    where: { eventId },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+
+  return c.json({ message: "ok", categories });
+});
+
+eventsRoute.post("/:id/vr-categories", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+  const organizer = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user?.id, eventGroup: "ORGANIZER" },
+  });
+  if (!organizer) return c.json({ message: "Forbidden" }, 403);
+
+  const body = await c.req.json().catch(() => ({}));
+  const nameEn = typeof body.nameEn === "string" ? body.nameEn.trim() : "";
+  const nameTh = typeof body.nameTh === "string" ? body.nameTh.trim() : "";
+  const sortOrder = typeof body.sortOrder === "number" ? body.sortOrder : 0;
+
+  if (!nameEn || !nameTh) {
+    return c.json({ message: "nameEn and nameTh are required" }, 400);
+  }
+
+  const created = await prisma.vrCategory.create({
+    data: { eventId, nameEn, nameTh, sortOrder },
+  });
+
+  return c.json({ message: "ok", category: created });
+});
+
+eventsRoute.put("/:id/vr-categories/:categoryId", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const categoryId = c.req.param("categoryId");
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+  const organizer = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user?.id, eventGroup: "ORGANIZER" },
+  });
+  if (!organizer) return c.json({ message: "Forbidden" }, 403);
+
+  const existing = await prisma.vrCategory.findUnique({ where: { id: categoryId } });
+  if (!existing || existing.eventId !== eventId) {
+    return c.json({ message: "Category not found" }, 404);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const data: any = {};
+  if (typeof body.nameEn === "string") data.nameEn = body.nameEn.trim();
+  if (typeof body.nameTh === "string") data.nameTh = body.nameTh.trim();
+  if (typeof body.sortOrder === "number") data.sortOrder = body.sortOrder;
+
+  if ("nameEn" in data && !data.nameEn) return c.json({ message: "nameEn is required" }, 400);
+  if ("nameTh" in data && !data.nameTh) return c.json({ message: "nameTh is required" }, 400);
+
+  const updated = await prisma.vrCategory.update({ where: { id: categoryId }, data });
+  return c.json({ message: "ok", category: updated });
+});
+
+eventsRoute.delete("/:id/vr-categories/:categoryId", async (c) => {
+  const user = c.get("user");
+  const eventId = c.req.param("id");
+  const categoryId = c.req.param("categoryId");
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+  const organizer = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user?.id, eventGroup: "ORGANIZER" },
+  });
+  if (!organizer) return c.json({ message: "Forbidden" }, 403);
+
+  const existing = await prisma.vrCategory.findUnique({ where: { id: categoryId } });
+  if (!existing || existing.eventId !== eventId) {
+    return c.json({ message: "Category not found" }, 404);
+  }
+
+  await prisma.vrCategory.delete({ where: { id: categoryId } });
+  return c.json({ message: "ok", deletedId: categoryId });
 });
 
 eventsRoute.post("/:id/special-rewards", async (c) => {

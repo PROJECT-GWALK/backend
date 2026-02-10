@@ -19,10 +19,10 @@ const updateEvaluationCriteriaSchema = createEvaluationCriteriaSchema.partial();
 const submitGradeSchema = z.object({
   teamId: z.string().uuid("Invalid team ID"),
   criteriaId: z.string().uuid("Invalid criteria ID"),
-  score: z.number().min(0, "Score cannot be negative").refine(
-    (val) => Number.isFinite(val),
-    "Score must be a valid number"
-  ),
+  score: z
+    .number()
+    .min(0, "Score cannot be negative")
+    .refine((val) => Number.isFinite(val), "Score must be a valid number"),
 });
 
 type CreateEvaluationCriteriaInput = z.infer<typeof createEvaluationCriteriaSchema>;
@@ -124,7 +124,7 @@ evaluationRoute.post(
       console.error("Error creating criteria:", error);
       return c.json({ message: "Failed to create criteria" }, 500);
     }
-  }
+  },
 );
 
 /**
@@ -172,7 +172,7 @@ evaluationRoute.put(
       console.error("Error updating criteria:", error);
       return c.json({ message: "Failed to update criteria" }, 500);
     }
-  }
+  },
 );
 
 /**
@@ -233,9 +233,12 @@ evaluationRoute.post(
       const { criteriaId, score } = c.req.valid("json") as SubmitGradeInput;
 
       if (!eventId || !teamId || !criteriaId) {
-        return c.json({
-          message: "Event ID, Team ID, and Criteria ID are required",
-        }, 400);
+        return c.json(
+          {
+            message: "Event ID, Team ID, and Criteria ID are required",
+          },
+          400,
+        );
       }
 
       // Check if user is a committee member
@@ -248,9 +251,12 @@ evaluationRoute.post(
       });
 
       if (!participant) {
-        return c.json({
-          message: "Only committee members can submit grades",
-        }, 403);
+        return c.json(
+          {
+            message: "Only committee members can submit grades",
+          },
+          403,
+        );
       }
 
       // Verify team exists in event
@@ -273,9 +279,12 @@ evaluationRoute.post(
 
       // Validate score does not exceed maxScore
       if (score > criteria.maxScore) {
-        return c.json({
-          message: `Score cannot exceed max score of ${criteria.maxScore}`,
-        }, 400);
+        return c.json(
+          {
+            message: `Score cannot exceed max score of ${criteria.maxScore}`,
+          },
+          400,
+        );
       }
 
       // Upsert the evaluation result
@@ -302,7 +311,7 @@ evaluationRoute.post(
       console.error("Error submitting grade:", error);
       return c.json({ message: "Failed to submit grade" }, 500);
     }
-  }
+  },
 );
 
 /**
@@ -406,10 +415,7 @@ evaluationRoute.get("/event/:eventId/results", async (c) => {
       const presenterName = presenter?.user.name || "Unknown";
 
       // Group results by committee member
-      const byCommittee = new Map<
-        string,
-        { name: string; scores: Map<string, number> }
-      >();
+      const byCommittee = new Map<string, { name: string; scores: Map<string, number> }>();
 
       team.evaluationResults.forEach((result) => {
         if (!byCommittee.has(result.committeeId)) {
@@ -418,45 +424,39 @@ evaluationRoute.get("/event/:eventId/results", async (c) => {
             scores: new Map(),
           });
         }
-        byCommittee
-          .get(result.committeeId)!
-          .scores.set(result.criteriaId, result.score);
+        byCommittee.get(result.committeeId)!.scores.set(result.criteriaId, result.score);
       });
 
       // Calculate weighted average for each committee member
-      const committeeScores = Array.from(byCommittee.entries()).map(
-        ([committeeId, data]) => {
-          let weightedSum = 0;
-          let totalWeight = 0;
+      const committeeScores = Array.from(byCommittee.entries()).map(([committeeId, data]) => {
+        let weightedSum = 0;
+        let totalWeight = 0;
 
-          criteria.forEach((crit) => {
-            const score = data.scores.get(crit.id) ?? 0;
-            const maxScore = crit.maxScore;
-            const normalizedScore = (score / maxScore) * 100;
-            weightedSum +=
-              (normalizedScore * crit.weightPercentage) / 100;
-            totalWeight += crit.weightPercentage;
-          });
+        criteria.forEach((crit) => {
+          const score = data.scores.get(crit.id) ?? 0;
+          const maxScore = crit.maxScore;
+          const normalizedScore = (score / maxScore) * 100;
+          weightedSum += (normalizedScore * crit.weightPercentage) / 100;
+          totalWeight += crit.weightPercentage;
+        });
 
-          const avgScore = totalWeight > 0 ? weightedSum / (totalWeight / 100) : 0;
+        const avgScore = totalWeight > 0 ? weightedSum / (totalWeight / 100) : 0;
 
-          return {
-            committeeId,
-            committeeName: data.name,
-            avgScore: parseFloat(avgScore.toFixed(2)),
-            scores: Object.fromEntries(data.scores),
-          };
-        }
-      );
+        return {
+          committeeId,
+          committeeName: data.name,
+          avgScore: parseFloat(avgScore.toFixed(2)),
+          scores: Object.fromEntries(data.scores),
+        };
+      });
 
       // Calculate overall average
       const overallAvg =
         committeeScores.length > 0
           ? parseFloat(
               (
-                committeeScores.reduce((sum, c) => sum + c.avgScore, 0) /
-                committeeScores.length
-              ).toFixed(2)
+                committeeScores.reduce((sum, c) => sum + c.avgScore, 0) / committeeScores.length
+              ).toFixed(2),
             )
           : 0;
 

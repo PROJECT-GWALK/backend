@@ -17,7 +17,6 @@ const createEvaluationCriteriaSchema = z.object({
 const updateEvaluationCriteriaSchema = createEvaluationCriteriaSchema.partial();
 
 const submitGradeSchema = z.object({
-  teamId: z.string().uuid("Invalid team ID"),
   criteriaId: z.string().uuid("Invalid criteria ID"),
   score: z
     .number()
@@ -239,6 +238,10 @@ evaluationRoute.post(
           },
           400,
         );
+      }
+
+      if (!z.string().uuid().safeParse(teamId).success) {
+        return c.json({ message: "Invalid team ID" }, 400);
       }
 
       // Check if user is a committee member

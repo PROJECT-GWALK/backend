@@ -27,6 +27,7 @@ const adminUpdateEventSchema = z.object({
   status: z.enum(["DRAFT", "PUBLISHED"]).optional(),
   publicView: z.boolean().optional(),
   publicJoin: z.boolean().optional(),
+  gradingEnabled: z.boolean().optional(),
 });
 
 const adminUpdateTeamSchema = z.object({

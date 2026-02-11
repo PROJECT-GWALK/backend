@@ -1645,19 +1645,12 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
     let myReward = 0;
     let mySpecialRewards: string[] = [];
     let myComment = "";
-    let myCategoryRewards: { categoryId: string; amount: number }[] = [];
 
     if (user) {
       const reward = await prisma.teamReward.findFirst({
         where: { eventId, teamId, giverId: user.id },
       });
       if (reward) myReward = reward.reward;
-
-      const categoryRewards = await prisma.teamRewardCategory.findMany({
-        where: { eventId, teamId, giverId: user.id },
-        select: { categoryId: true, amount: true },
-      });
-      myCategoryRewards = categoryRewards;
 
       const myParticipant = await prisma.eventParticipant.findFirst({
         where: { eventId, userId: user.id, eventGroup: "COMMITTEE" },
@@ -1688,31 +1681,12 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
     });
     const totalVr = (totalReward._sum.reward || 0) + (totalCategoryReward._sum.amount || 0);
 
-    const vrCategories = await prisma.vrCategory.findMany({
-      where: { eventId },
-      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-    });
-
-    const categoryTotalsAgg = await prisma.teamRewardCategory.groupBy({
-      by: ["categoryId"],
-      where: { eventId, teamId },
-      _sum: { amount: true },
-    });
-
-    const categoryTotals = categoryTotalsAgg.map((r) => ({
-      categoryId: r.categoryId,
-      total: r._sum.amount || 0,
-    }));
-
     return c.json({
       message: "ok",
       team: {
         ...team,
         totalVr,
         myReward,
-        myCategoryRewards,
-        vrCategories,
-        categoryTotals,
         mySpecialRewards,
         myComment,
       },
@@ -2054,6 +2028,8 @@ eventsRoute.put("/:id", async (c) => {
       data.publicView = (form["publicView"] as string) === "true";
     if (typeof form["hasCommittee"] === "string")
       data.hasCommittee = (form["hasCommittee"] as string) === "true";
+    if (typeof form["gradingEnabled"] === "string")
+      data.gradingEnabled = (form["gradingEnabled"] as string) === "true";
     if (typeof form["currentStep"] === "string") {
       const cs = parseInt(form["currentStep"] as string);
       if (!Number.isNaN(cs)) data.currentStep = cs;
@@ -2161,6 +2137,8 @@ eventsRoute.put("/:id", async (c) => {
           ? body.vrTeamCapCommittee
           : event.vrTeamCapCommittee,
       hasCommittee: typeof body.hasCommittee === "boolean" ? body.hasCommittee : event.hasCommittee,
+      gradingEnabled:
+        typeof body.gradingEnabled === "boolean" ? body.gradingEnabled : event.gradingEnabled,
       unitReward: typeof body.unitReward === "string" ? body.unitReward : event.unitReward,
     } as any;
     if ("imageCover" in body)
@@ -2269,110 +2247,6 @@ eventsRoute.put("/:id/public-view", async (c) => {
   if (typeof pv === "undefined") return c.json({ message: "publicView is required" }, 400);
   const updated = await prisma.event.update({ where: { id }, data: { publicView: pv } });
   return c.json({ message: "ok", event: updated });
-});
-
-eventsRoute.get("/:id/vr-categories", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-
-  const event = await prisma.event.findUnique({ where: { id: eventId } });
-  if (!event) return c.json({ message: "Event not found" }, 404);
-
-  if (event.status === "DRAFT") {
-    if (!user) return c.json({ message: "Forbidden" }, 403);
-    const organizer = await prisma.eventParticipant.findFirst({
-      where: { eventId, userId: user.id, eventGroup: "ORGANIZER" },
-    });
-    if (!organizer) return c.json({ message: "Forbidden" }, 403);
-  } else if (!event.publicView) {
-    if (!user) return c.json({ message: "Forbidden" }, 403);
-    const participant = await prisma.eventParticipant.findFirst({
-      where: { eventId, userId: user.id },
-    });
-    if (!participant) return c.json({ message: "Forbidden" }, 403);
-  }
-
-  const categories = await prisma.vrCategory.findMany({
-    where: { eventId },
-    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-  });
-
-  return c.json({ message: "ok", categories });
-});
-
-eventsRoute.post("/:id/vr-categories", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-  const event = await prisma.event.findUnique({ where: { id: eventId } });
-  if (!event) return c.json({ message: "Event not found" }, 404);
-  const organizer = await prisma.eventParticipant.findFirst({
-    where: { eventId, userId: user?.id, eventGroup: "ORGANIZER" },
-  });
-  if (!organizer) return c.json({ message: "Forbidden" }, 403);
-
-  const body = await c.req.json().catch(() => ({}));
-  const nameEn = typeof body.nameEn === "string" ? body.nameEn.trim() : "";
-  const nameTh = typeof body.nameTh === "string" ? body.nameTh.trim() : "";
-  const sortOrder = typeof body.sortOrder === "number" ? body.sortOrder : 0;
-
-  if (!nameEn || !nameTh) {
-    return c.json({ message: "nameEn and nameTh are required" }, 400);
-  }
-
-  const created = await prisma.vrCategory.create({
-    data: { eventId, nameEn, nameTh, sortOrder },
-  });
-
-  return c.json({ message: "ok", category: created });
-});
-
-eventsRoute.put("/:id/vr-categories/:categoryId", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-  const categoryId = c.req.param("categoryId");
-  const event = await prisma.event.findUnique({ where: { id: eventId } });
-  if (!event) return c.json({ message: "Event not found" }, 404);
-  const organizer = await prisma.eventParticipant.findFirst({
-    where: { eventId, userId: user?.id, eventGroup: "ORGANIZER" },
-  });
-  if (!organizer) return c.json({ message: "Forbidden" }, 403);
-
-  const existing = await prisma.vrCategory.findUnique({ where: { id: categoryId } });
-  if (!existing || existing.eventId !== eventId) {
-    return c.json({ message: "Category not found" }, 404);
-  }
-
-  const body = await c.req.json().catch(() => ({}));
-  const data: any = {};
-  if (typeof body.nameEn === "string") data.nameEn = body.nameEn.trim();
-  if (typeof body.nameTh === "string") data.nameTh = body.nameTh.trim();
-  if (typeof body.sortOrder === "number") data.sortOrder = body.sortOrder;
-
-  if ("nameEn" in data && !data.nameEn) return c.json({ message: "nameEn is required" }, 400);
-  if ("nameTh" in data && !data.nameTh) return c.json({ message: "nameTh is required" }, 400);
-
-  const updated = await prisma.vrCategory.update({ where: { id: categoryId }, data });
-  return c.json({ message: "ok", category: updated });
-});
-
-eventsRoute.delete("/:id/vr-categories/:categoryId", async (c) => {
-  const user = c.get("user");
-  const eventId = c.req.param("id");
-  const categoryId = c.req.param("categoryId");
-  const event = await prisma.event.findUnique({ where: { id: eventId } });
-  if (!event) return c.json({ message: "Event not found" }, 404);
-  const organizer = await prisma.eventParticipant.findFirst({
-    where: { eventId, userId: user?.id, eventGroup: "ORGANIZER" },
-  });
-  if (!organizer) return c.json({ message: "Forbidden" }, 403);
-
-  const existing = await prisma.vrCategory.findUnique({ where: { id: categoryId } });
-  if (!existing || existing.eventId !== eventId) {
-    return c.json({ message: "Category not found" }, 404);
-  }
-
-  await prisma.vrCategory.delete({ where: { id: categoryId } });
-  return c.json({ message: "ok", deletedId: categoryId });
 });
 
 eventsRoute.post("/:id/special-rewards", async (c) => {

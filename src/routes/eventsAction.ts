@@ -24,10 +24,9 @@ eventsActionRoute.put(
   async (c) => {
     const user = c.get("user");
     const eventId = c.req.param("eventId");
-    const { projectId, amount, categories } = c.req.valid("json") as {
+    const { projectId, amount } = c.req.valid("json") as {
       projectId: string;
-      amount?: number;
-      categories?: { categoryId: string; amount: number }[];
+      amount: number;
     };
 
     if (!eventId) {
@@ -69,39 +68,11 @@ eventsActionRoute.put(
   // 3. Transaction
   try {
     const result = await prisma.$transaction(async (tx) => {
-      const usingCategories = Array.isArray(categories);
-      const normalizedCategories = usingCategories
-        ? categories.reduce(
-            (acc, r) => {
-              const categoryId = String(r.categoryId || "").trim();
-              const rawAmount = typeof r.amount === "number" ? r.amount : 0;
-              const nextAmount = Math.max(0, Math.floor(rawAmount));
-              if (!categoryId) return acc;
-              acc.set(categoryId, (acc.get(categoryId) || 0) + nextAmount);
-              return acc;
-            },
-            new Map<string, number>(),
-          )
-        : null;
-      const totalAmount = usingCategories
-        ? Array.from(normalizedCategories?.values() || []).reduce((sum, n) => sum + n, 0)
-        : typeof amount === "number"
-          ? Math.max(0, Math.floor(amount))
-          : 0;
+      const totalAmount =
+        typeof amount === "number" ? Math.max(0, Math.floor(amount)) : 0;
 
-      if (usingCategories) {
-        const categoryIds = Array.from(normalizedCategories?.keys() || []);
-        const existingCategories = await tx.vrCategory.findMany({
-          where: { eventId: eventId, id: { in: categoryIds } },
-          select: { id: true },
-        });
-        if (existingCategories.length !== categoryIds.length) {
-          throw new Error("Some categories not found or invalid");
-        }
-      } else {
-        if (typeof amount !== "number") {
-          throw new Error("Invalid input");
-        }
+      if (typeof amount !== "number") {
+        throw new Error("Invalid input");
       }
 
       if (participant.event.vrTeamCapEnabled) {
@@ -134,14 +105,12 @@ eventsActionRoute.put(
       });
 
       const totalUsedOthers = (otherRewards._sum.reward || 0) + (otherCategoryRewards._sum.amount || 0);
-      const thisTeamCategoryRewards = usingCategories
-        ? 0
-        : (
-            await tx.teamRewardCategory.aggregate({
-              where: { eventId: eventId, teamId: projectId, giverId: user.id },
-              _sum: { amount: true },
-            })
-          )._sum.amount || 0;
+      const thisTeamCategoryRewards = (
+        await tx.teamRewardCategory.aggregate({
+          where: { eventId: eventId, teamId: projectId, giverId: user.id },
+          _sum: { amount: true },
+        })
+      )._sum.amount || 0;
 
       const newTotalUsed = totalUsedOthers + thisTeamCategoryRewards + totalAmount;
 
@@ -149,43 +118,9 @@ eventsActionRoute.put(
         throw new Error("Insufficient VR balance");
       }
 
-      if (usingCategories) {
-        await tx.teamRewardCategory.deleteMany({
-          where: { eventId: eventId, teamId: projectId, giverId: user.id },
-        });
-
-        const rows = Array.from(normalizedCategories?.entries() || [])
-          .filter(([, amt]) => amt > 0)
-          .map(([categoryId, amt]) => ({
-            eventId: eventId,
-            teamId: projectId,
-            giverId: user.id,
-            categoryId,
-            amount: amt,
-          }));
-
-        if (rows.length > 0) {
-          await tx.teamRewardCategory.createMany({ data: rows });
-        }
-
-        await tx.teamReward.deleteMany({
-          where: { eventId: eventId, teamId: projectId, giverId: user.id },
-        });
-
-        const usedRewards = await tx.teamReward.aggregate({
-          where: { eventId: eventId, giverId: user.id },
-          _sum: { reward: true },
-        });
-        const usedCategoryRewards = await tx.teamRewardCategory.aggregate({
-          where: { eventId: eventId, giverId: user.id },
-          _sum: { amount: true },
-        });
-
-        return {
-          totalLimit: participant.virtualReward,
-          totalUsed: (usedRewards._sum.reward || 0) + (usedCategoryRewards._sum.amount || 0),
-        };
-      }
+      await tx.teamRewardCategory.deleteMany({
+        where: { eventId: eventId, teamId: projectId, giverId: user.id },
+      });
 
       const existingReward = await tx.teamReward.findFirst({
         where: { eventId: eventId, teamId: projectId, giverId: user.id },
@@ -238,7 +173,6 @@ eventsActionRoute.put(
     const status = [
       "Insufficient VR balance",
       "Exceeds VR per-team limit",
-      "Some categories not found or invalid",
       "Invalid input",
     ].includes(error.message)
       ? 400

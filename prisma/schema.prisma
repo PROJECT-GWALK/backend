@@ -102,6 +102,7 @@ model Event {
   locationName           String?
   imageCover             String?
   hasCommittee           Boolean     @default(false)
+  gradingEnabled         Boolean     @default(true)
   publicJoin             Boolean     @default(true)
   passwordJoin           String?
   startJoinDate          DateTime?   @db.Timestamptz(3)

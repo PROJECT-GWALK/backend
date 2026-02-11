@@ -9,19 +9,8 @@ export const adminDashboardParams = z.object({
 // Events Action
 export const giveVrSchema = z.object({
   projectId: z.string().min(1),
-  amount: z.number().int().min(0).optional(),
-  categories: z
-    .array(
-      z.object({
-        categoryId: z.string().min(1),
-        amount: z.number().int().min(0),
-      }),
-    )
-    .optional(),
-}).refine(
-  (val) => (typeof val.amount === "number") !== Array.isArray(val.categories),
-  { message: "Provide either amount or categories" },
-);
+  amount: z.number().int().min(0),
+});
 
 export const resetVrSchema = z.object({
   projectId: z.string().min(1),

@@ -59,12 +59,12 @@ services:
       - "3001:3001"
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:15432/${POSTGRES_DB}?schema=public
-      - MINIO_ENDPOINT=${PROJECT_NAME}-minio
-      - MINIO_PORT=9000
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
-      - MINIO_BUCKET=${OBJ_BUCKET}
-      - MINIO_USE_SSL=false
+      - OBJ_STORAGE_ADDR=${OBJ_STORAGE_ADDR}
+      - OBJ_STORAGE_PORT=${OBJ_STORAGE_PORT}
+      - OBJ_ACCESS_KEY=${MINIO_ROOT_USER}
+      - OBJ_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - OBJ_BUCKET=${OBJ_BUCKET}
+      - OBJ_STORAGE_SSL=true
     # depends_on:
     #   - postgres
     #   - minio

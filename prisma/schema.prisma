@@ -56,9 +56,11 @@ model User {
   bans         UserBan[]          @relation("BannedBy")
   participants EventParticipant[]
   rewardsGiven TeamReward[]       @relation("RewardGiver")
+  categoryRewardsGiven TeamRewardCategory[] @relation("RewardCategoryGiver")
   comments     Comment[]
   ratings      EventRating[]
   dailyActives UserDailyActive[]
+  evaluationResults EvaluationResult[]
 }
 
 model Account {
@@ -100,6 +102,7 @@ model Event {
   locationName           String?
   imageCover             String?
   hasCommittee           Boolean     @default(false)
+  gradingEnabled         Boolean     @default(true)
   publicJoin             Boolean     @default(true)
   passwordJoin           String?
   startJoinDate          DateTime?   @db.Timestamptz(3)
@@ -110,6 +113,9 @@ model Event {
   maxTeamMembers         Int?
   virtualRewardGuest     Int         @default(0)
   virtualRewardCommittee Int         @default(0)
+  vrTeamCapEnabled       Boolean     @default(true)
+  vrTeamCapGuest         Int         @default(100)
+  vrTeamCapCommittee     Int         @default(500)
   unitReward             String?
   maxTeams               Int?
   status                 EventStatus @default(DRAFT)
@@ -120,12 +126,16 @@ model Event {
   teams          Team[]
   fileTypes      EventFileType[]
   rewards        TeamReward[]
+  vrCategories   VrCategory[]
+  categoryRewards TeamRewardCategory[]
   feedbacks      CommitteeFeedback[]
   comments       Comment[]
   ratings        EventRating[]
   rankings       TeamRanking[]
   specialRewards SpecialReward[]
   linkInvite     LinkInvite?
+  evaluationCriteria EvaluationCriteria[]
+  evaluationResults EvaluationResult[]
 }
 
 //////////////////////////////////////////////////////////
@@ -163,10 +173,42 @@ model Team {
   participants EventParticipant[]
   files        TeamFile[]
   rewards      TeamReward[]
+  categoryRewards TeamRewardCategory[]
   feedbacks    CommitteeFeedback[]
   comments     Comment[]
   rankings     TeamRanking[]
   votes        SpecialRewardVote[]
+  evaluationResults EvaluationResult[]
+}
+
+model VrCategory {
+  id        String   @id @default(uuid()) @db.Uuid
+  eventId   String   @db.Uuid
+  nameEn    String
+  nameTh    String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  event   Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  rewards TeamRewardCategory[]
+}
+
+model TeamRewardCategory {
+  id         String   @id @default(uuid()) @db.Uuid
+  eventId    String   @db.Uuid
+  teamId     String   @db.Uuid
+  giverId    String   @db.Uuid
+  categoryId String   @db.Uuid
+  amount     Int
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  event    Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  team     Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  giver    User       @relation("RewardCategoryGiver", fields: [giverId], references: [id], onDelete: Cascade)
+  category VrCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, teamId, giverId, categoryId])
 }
 
 //////////////////////////////////////////////////////////
@@ -290,7 +332,7 @@ model SpecialRewardVote {
   committee EventParticipant @relation(fields: [committeeId], references: [id], onDelete: Cascade)
   team      Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
-  @@unique([rewardId, committeeId])
+  @@unique([rewardId, committeeId, teamId])
 }
 
 //////////////////////////////////////////////////////////
@@ -330,6 +372,42 @@ model UserDailyActive {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, date]) // กัน user เดียวกันถูกนับซ้ำในวันเดียว
+}
+
+//////////////////////////////////////////////////////////
+// EVALUATION & GRADING
+//////////////////////////////////////////////////////////
+model EvaluationCriteria {
+  id                String   @id @default(uuid()) @db.Uuid
+  eventId           String   @db.Uuid
+  name              String
+  description       String?
+  maxScore          Float
+  weightPercentage  Float
+  sortOrder         Int      @default(0)
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
+
+  event   Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  results EvaluationResult[]
+}
+
+model EvaluationResult {
+  id                String   @id @default(uuid()) @db.Uuid
+  eventId           String   @db.Uuid
+  teamId            String   @db.Uuid
+  criteriaId        String   @db.Uuid
+  committeeId       String   @db.Uuid
+  score             Float
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
+
+  event    Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  team     Team               @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  criteria EvaluationCriteria @relation(fields: [criteriaId], references: [id], onDelete: Cascade)
+  committee User              @relation(fields: [committeeId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, criteriaId, committeeId])
 }
 
 //////////////////////////////////////////////////////////

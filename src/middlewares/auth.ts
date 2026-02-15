@@ -1,7 +1,7 @@
 import type { Context, Next } from "hono";
 import { getCookie } from "hono/cookie";
-import type { User } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import type { User } from "../generated/prisma/client.js";
 
 export async function authMiddleware(c: Context<{ Variables: { user: User } }>, next: Next) {
   let token = getCookie(c, "authjs.session-token");

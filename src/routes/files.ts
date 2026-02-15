@@ -1,16 +1,20 @@
 import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
 import { getMinio } from "../lib/minio.js";
 import mime from "mime-types";
+import { filesParamSchema } from "../lib/types.js";
 
 const filesRoute = new Hono();
 
-filesRoute.get("/:bucket/:object{.+}", async (c) => {
-  const minio = getMinio();
-  const bucket = c.req.param("bucket");
-  const objectName = c.req.param("object");
+filesRoute.get(
+  "/:bucket/:object{.+}",
+  zValidator("param", filesParamSchema),
+  async (c) => {
+    const minio = getMinio();
+    const { bucket, object: objectName } = c.req.valid("param");
 
-  try {
-    const stream = await minio.getObject(bucket, objectName);
+    try {
+      const stream = await minio.getObject(bucket, objectName);
     if (!stream) {
       return c.json({ message: "File not found" }, 404);
     }

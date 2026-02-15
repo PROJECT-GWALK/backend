@@ -1,5 +1,5 @@
-import type { User } from "@prisma/client";
 import type { Context, Next } from "hono";
+import type { User } from "../generated/prisma/client.js";
 
 export async function adminOnly(c: Context<{ Variables: { user: User } }>, next: Next) {
   const user = c.get("user");

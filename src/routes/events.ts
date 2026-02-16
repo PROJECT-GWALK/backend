@@ -67,7 +67,7 @@ eventsRoute.get("/", async (c) => {
   // Use a dummy UUID if user is not logged in to prevent fetching all participants
   const userId = user?.id || "00000000-0000-0000-0000-000000000000";
   const events = await prisma.event.findMany({
-    where: { status: "PUBLISHED", publicView: true },
+    where: { status: "PUBLISHED", publicView: true, isHidden: false },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
@@ -117,8 +117,13 @@ eventsRoute.get("/", async (c) => {
 
 eventsRoute.get("/me", async (c) => {
   const user = c.get("user");
+  const isAdmin = user?.role === "ADMIN";
   const events = await prisma.event.findMany({
-    where: { status: { not: "DRAFT" }, participants: { some: { userId: user?.id } } },
+    where: {
+      status: { not: "DRAFT" },
+      participants: { some: { userId: user?.id } },
+      ...(isAdmin ? {} : { isHidden: false }),
+    },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
@@ -164,6 +169,7 @@ eventsRoute.get("/me/history", async (c) => {
       eventGroup: { not: "ORGANIZER" },
       event: {
         status: "PUBLISHED",
+        isHidden: false,
       },
     },
     include: {
@@ -271,6 +277,7 @@ eventsRoute.get("/me/history", async (c) => {
       eventGroup: "ORGANIZER",
       event: {
         status: "PUBLISHED",
+        isHidden: false,
       },
     },
     include: {
@@ -328,6 +335,7 @@ eventsRoute.get("/user/:username/history", async (c) => {
       eventGroup: { not: "ORGANIZER" },
       event: {
         status: "PUBLISHED",
+        isHidden: false,
       },
     },
     include: {
@@ -435,6 +443,7 @@ eventsRoute.get("/user/:username/history", async (c) => {
       eventGroup: "ORGANIZER",
       event: {
         status: "PUBLISHED",
+        isHidden: false,
       },
     },
     include: {
@@ -591,6 +600,7 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
     },
   });
   if (!event) return c.json({ message: "Event not found" }, 404);
+  if (event.isHidden) return c.json({ message: "Forbidden" }, 403);
 
   // For DRAFT events, only organizers can view
   if (event.status === "DRAFT") {
@@ -814,6 +824,7 @@ eventsRoute.get("/:id/rankings", async (c) => {
 
   if (!event) return c.json({ message: "Event not found" }, 404);
   if (event.status !== "PUBLISHED") return c.json({ message: "Event not published" }, 403);
+  if (event.isHidden) return c.json({ message: "Forbidden" }, 403);
 
   // Check permission
   let canView = event.publicView;
@@ -906,7 +917,7 @@ eventsRoute.get(
 
     if (!user) return c.json({ message: "Unauthorized" }, 401);
     const event = await prisma.event.findUnique({ where: { id: eventId } });
-    if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
+    if (!event || event.status !== "PUBLISHED" || event.isHidden) return c.json({ message: "Event not found" }, 404);
     const existing = await prisma.eventParticipant.findFirst({
       where: { eventId, userId: user.id },
     });
@@ -925,7 +936,7 @@ eventsRoute.get(
     const { role } = c.req.valid("query");
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
-    if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
+    if (!event || event.status !== "PUBLISHED" || event.isHidden) return c.json({ message: "Event not found" }, 404);
 
     let linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });
     if (!linkInvite) {
@@ -952,7 +963,7 @@ eventsRoute.post(
     const { role } = c.req.valid("query");
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
-    if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
+    if (!event || event.status !== "PUBLISHED" || event.isHidden) return c.json({ message: "Event not found" }, 404);
 
     // Check if user is an organizer
     const organizer = await prisma.eventParticipant.findFirst({
@@ -996,7 +1007,7 @@ eventsRoute.get(
     const { token, role: roleParam } = c.req.valid("query");
 
     const event = await prisma.event.findUnique({ where: { id: eventId } });
-    if (!event || event.status !== "PUBLISHED") return c.json({ message: "Event not found" }, 404);
+    if (!event || event.status !== "PUBLISHED" || event.isHidden) return c.json({ message: "Event not found" }, 404);
 
     if (token) {
       const linkInvite = await prisma.linkInvite.findUnique({ where: { eventId } });

@@ -108,6 +108,7 @@ model Event {
   startJoinDate          DateTime?   @db.Timestamptz(3)
   endJoinDate            DateTime?   @db.Timestamptz(3)
   publicView             Boolean     @default(true)
+  isHidden               Boolean     @default(false)
   startView              DateTime?   @db.Timestamptz(3)
   endView                DateTime?   @db.Timestamptz(3)
   maxTeamMembers         Int?

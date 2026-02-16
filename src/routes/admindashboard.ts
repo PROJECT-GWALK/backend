@@ -28,6 +28,7 @@ const adminUpdateEventSchema = z.object({
   publicView: z.boolean().optional(),
   publicJoin: z.boolean().optional(),
   gradingEnabled: z.boolean().optional(),
+  isHidden: z.boolean().optional(),
 });
 
 const adminUpdateTeamSchema = z.object({
@@ -181,6 +182,7 @@ adminDashboard
           endJoinDate: true,
           publicView: true,
           publicJoin: true,
+          isHidden: true,
           _count: { select: { participants: true, teams: true } },
         },
       }),
@@ -197,6 +199,7 @@ adminDashboard
       endJoinDate: e.endJoinDate,
       publicView: e.publicView,
       publicJoin: e.publicJoin,
+      isHidden: e.isHidden,
       participantsCount: e._count.participants,
       teamsCount: e._count.teams,
     }));

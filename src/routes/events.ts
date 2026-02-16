@@ -26,6 +26,21 @@ const eventsRoute = new Hono<{ Variables: { user: User | null } }>();
 
 eventsRoute.route("/:eventId/action", eventsActionRoute);
 
+eventsRoute.get("/check-name", async (c) => {
+  try {
+    const eventName = c.req.query("eventName");
+    if (!eventName || typeof eventName !== "string" || eventName.trim().length < 1) {
+      return c.json({ message: "eventName is required" }, 400);
+    }
+    const exists = await prisma.event.findFirst({
+      where: { eventName: { equals: eventName.trim(), mode: "insensitive" } },
+    });
+    return c.json({ message: "ok", available: !exists });
+  } catch {
+    return c.json({ message: "Internal server error" }, 500);
+  }
+});
+
 eventsRoute.use("*", async (c, next) => {
   const path = c.req.path;
   const method = c.req.method;
@@ -1992,17 +2007,6 @@ eventsRoute.get("/me/drafts", async (c) => {
     select: { id: true, eventName: true, createdAt: true, imageCover: true },
   });
   return c.json({ message: "ok", events: drafts });
-});
-
-eventsRoute.get("/check-name", async (c) => {
-  const eventName = c.req.query("eventName");
-  if (!eventName || typeof eventName !== "string" || eventName.trim().length < 1) {
-    return c.json({ message: "eventName is required" }, 400);
-  }
-  const exists = await prisma.event.findFirst({
-    where: { eventName: { equals: eventName.trim(), mode: "insensitive" } },
-  });
-  return c.json({ message: "ok", available: !exists });
 });
 
 eventsRoute.post("/", async (c) => {

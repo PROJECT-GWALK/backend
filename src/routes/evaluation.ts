@@ -8,7 +8,7 @@ import { z } from "zod";
 // Validation Schemas
 const createEvaluationCriteriaSchema = z.object({
   name: z.string().min(1, "Criteria name is required"),
-  description: z.string().optional(),
+  description: z.string().nullable().optional(),
   maxScore: z.number().positive("Max score must be positive"),
   weightPercentage: z.number().min(0).max(100, "Weight must be between 0-100"),
   sortOrder: z.number().int().default(0),

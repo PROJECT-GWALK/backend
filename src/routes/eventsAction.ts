@@ -618,22 +618,12 @@ eventsActionRoute.put(
       return c.json({ message: "Event is hidden by admin" }, 403);
     }
 
-    // Check if event is active
     const now = new Date();
-    if (
-      !participant.event.startView ||
-      !participant.event.endView ||
-      now < participant.event.startView ||
-      now > participant.event.endView
-    ) {
-      return c.json({ message: "Event is not active" }, 400);
+    if (!participant.event.endView) {
+      return c.json({ message: "Event end time is not set" }, 400);
     }
-
-    if (participant.eventGroup === "ORGANIZER") {
-      return c.json(
-        { message: "Organizers cannot rate their own events" },
-        403,
-      );
+    if (now < participant.event.endView) {
+      return c.json({ message: "Event is not finished" }, 400);
     }
 
     try {

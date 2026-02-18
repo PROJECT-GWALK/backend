@@ -626,6 +626,7 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
     if (!organizer) return c.json({ message: "Forbidden" }, 403);
   }
   // For non-public events, only participants can view
+  /*
   else if (!event.publicView) {
     if (!user) return c.json({ message: "Forbidden" }, 403);
     const participant = await prisma.eventParticipant.findFirst({
@@ -633,6 +634,7 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
     });
     if (!participant) return c.json({ message: "Forbidden" }, 403);
   }
+  */
   // Otherwise, it's a PUBLISHED public event - allow everyone (including unauthenticated)
 
   // Calculate Dashboard Stats

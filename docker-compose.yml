@@ -63,7 +63,7 @@ services:
       - OBJ_ACCESS_KEY=${OBJ_ACCESS_KEY}
       - OBJ_SECRET_KEY=${OBJ_SECRET_KEY}
       - OBJ_BUCKET=${OBJ_BUCKET}
-      - OBJ_STORAGE_SSL=true
+      - OBJ_STORAGE_SSL=${OBJ_STORAGE_SSL}
     # depends_on:
     #   - postgres
     #   - minio

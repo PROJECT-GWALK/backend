@@ -60,10 +60,10 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - OBJ_STORAGE_ADDR=${OBJ_STORAGE_ADDR}
       - OBJ_STORAGE_PORT=${OBJ_STORAGE_PORT}
-      - OBJ_ACCESS_KEY=${MINIO_ROOT_USER}
-      - OBJ_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - OBJ_ACCESS_KEY=${OBJ_ACCESS_KEY}
+      - OBJ_SECRET_KEY=${OBJ_SECRET_KEY}
       - OBJ_BUCKET=${OBJ_BUCKET}
-      - OBJ_STORAGE_SSL=true
+      - OBJ_STORAGE_SSL=${OBJ_STORAGE_SSL}
     # depends_on:
     #   - postgres
     #   - minio

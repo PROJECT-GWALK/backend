@@ -55,12 +55,12 @@ export const updateUserProfileSchema = z.object({
 
 // Events Invite
 export const inviteRoleQuerySchema = z.object({
-  role: z.enum(["presenter", "guest", "committee"]),
+  role: z.enum(["presenter", "guest", "committee", "organizer"]),
 });
 
 export const invitePreviewSchema = z.object({
   token: z.string().optional(),
-  role: z.enum(["presenter", "guest", "committee"]).optional(),
+  role: z.enum(["presenter", "guest", "committee", "organizer"]).optional(),
 });
 
 export const inviteSchema = z.object({

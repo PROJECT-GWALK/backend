@@ -421,6 +421,7 @@ model LinkInvite {
   committeeToken String   @default(uuid())
   presenterToken String   @default(uuid())
   guestToken     String   @default(uuid())
+  organizerToken String?
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 }

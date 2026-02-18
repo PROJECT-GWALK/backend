@@ -132,12 +132,11 @@ eventsRoute.get("/", async (c) => {
 
 eventsRoute.get("/me", async (c) => {
   const user = c.get("user");
-  const isAdmin = user?.role === "ADMIN";
   const events = await prisma.event.findMany({
     where: {
       status: { not: "DRAFT" },
       participants: { some: { userId: user?.id } },
-      ...(isAdmin ? {} : { isHidden: false }),
+      isHidden: false,
     },
     orderBy: { createdAt: "desc" },
     select: {

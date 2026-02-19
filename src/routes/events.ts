@@ -49,6 +49,7 @@ eventsRoute.use("*", async (c, next) => {
   if (
     method === "GET" &&
     (/\/api\/events\/[0-9a-fA-F-]{36}$/.test(path) ||
+      /\/api\/events\/[0-9a-fA-F-]{36}\/teams\/[0-9a-fA-F-]{36}$/.test(path) ||
       path.endsWith("/api/events") ||
       path.endsWith("/api/events/") ||
       /\/api\/events\/user\/.*\/history$/.test(path))
@@ -1766,10 +1767,32 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
   const { id: eventId, teamId } = c.req.valid("param");
 
   try {
+    const event = await prisma.event.findUnique({
+      where: { id: eventId },
+      select: { startView: true, status: true, publicView: true, isHidden: true },
+    });
+    if (!event) return c.json({ message: "Event not found" }, 404);
+    if (event.status !== "PUBLISHED") return c.json({ message: "Event not published" }, 403);
+    if (event.isHidden) return c.json({ message: "Forbidden" }, 403);
+
+    let canView = event.publicView;
+    if (!canView && user) {
+      const p = await prisma.eventParticipant.findFirst({
+        where: { eventId, userId: user.id },
+        select: { id: true },
+      });
+      if (p) canView = true;
+    }
+    if (!canView) return c.json({ message: "Forbidden" }, 403);
+
     const team = await prisma.team.findUnique({
       where: { id: teamId },
       include: {
-        participants: { include: { user: true } },
+        participants: {
+          include: {
+            user: { select: { id: true, name: true, username: true, image: true } },
+          },
+        },
         files: { include: { fileType: true } },
       },
     });
@@ -1777,9 +1800,6 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
     if (!team || team.eventId !== eventId) {
       return c.json({ message: "Team not found" }, 404);
     }
-
-    const event = await prisma.event.findUnique({ where: { id: eventId }, select: { startView: true } });
-    if (!event) return c.json({ message: "Event not found" }, 404);
 
     const now = new Date();
     const eventStarted = !event.startView || now >= event.startView;

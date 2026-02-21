@@ -29,11 +29,13 @@ eventsRoute.route("/:eventId/action", eventsActionRoute);
 eventsRoute.get("/check-name", async (c) => {
   try {
     const eventName = c.req.query("eventName");
-    if (!eventName || typeof eventName !== "string" || eventName.trim().length < 1) {
+    if (!eventName || typeof eventName !== "string") {
       return c.json({ message: "eventName is required" }, 400);
     }
+    const normalizedName = normalizeEventName(eventName);
+    if (normalizedName.length < 1) return c.json({ message: "eventName is required" }, 400);
     const exists = await prisma.event.findFirst({
-      where: { eventName: { equals: eventName.trim(), mode: "insensitive" } },
+      where: { eventName: { equals: normalizedName, mode: "insensitive" } },
     });
     return c.json({ message: "ok", available: !exists });
   } catch {
@@ -67,6 +69,8 @@ const roleMap = {
   committee: "COMMITTEE",
   organizer: "ORGANIZER",
 } as const;
+
+const normalizeEventName = (name: string) => name.normalize("NFKC").trim().replace(/\s+/g, " ");
 
 function signInvite(eventId: string, userId: string, role: keyof typeof roleMap) {
   const payload = `${eventId}|${userId}|${role}`;
@@ -2177,10 +2181,11 @@ eventsRoute.post("/", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (!user) return c.json({ message: "Unauthorized" }, 401);
   const eventName = body.eventName;
-  if (!eventName || typeof eventName !== "string" || eventName.trim().length < 1) {
+  if (!eventName || typeof eventName !== "string") {
     return c.json({ message: "Event name is required" }, 400);
   }
-  const normalizedName = eventName.trim();
+  const normalizedName = normalizeEventName(eventName);
+  if (!normalizedName.length) return c.json({ message: "Event name is required" }, 400);
   const exists = await prisma.event.findFirst({
     where: { eventName: { equals: normalizedName, mode: "insensitive" } },
   });
@@ -2212,18 +2217,18 @@ eventsRoute.put("/:id", async (c) => {
     const form = await c.req.parseBody();
     newName = typeof form["eventName"] === "string" ? (form["eventName"] as string) : undefined;
     if (newName) {
-      const trimmed = newName.trim();
-      if (!trimmed.length) {
+      const normalized = normalizeEventName(newName);
+      if (!normalized.length) {
         return c.json({ message: "Event name is required" }, 400);
       }
       const dup = await prisma.event.findFirst({
         where: {
           id: { not: id },
-          eventName: { equals: trimmed, mode: "insensitive" },
+          eventName: { equals: normalized, mode: "insensitive" },
         },
       });
       if (dup) return c.json({ message: "Event name already exists" }, 409);
-      newName = trimmed;
+      newName = normalized;
     }
 
     data.eventName = newName ?? event.eventName;
@@ -2300,18 +2305,18 @@ eventsRoute.put("/:id", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     newName = typeof body.eventName === "string" ? body.eventName : undefined;
     if (newName) {
-      const trimmed = newName.trim();
-      if (!trimmed.length) {
+      const normalized = normalizeEventName(newName);
+      if (!normalized.length) {
         return c.json({ message: "Event name is required" }, 400);
       }
       const dup = await prisma.event.findFirst({
         where: {
           id: { not: id },
-          eventName: { equals: trimmed, mode: "insensitive" },
+          eventName: { equals: normalized, mode: "insensitive" },
         },
       });
       if (dup) return c.json({ message: "Event name already exists" }, 409);
-      newName = trimmed;
+      newName = normalized;
     }
     data = {
       eventName: newName ?? event.eventName,

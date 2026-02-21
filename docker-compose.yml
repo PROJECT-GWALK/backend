@@ -49,29 +49,26 @@ services:
   #     - project-net
 
   backend:
-    # Version 1: Node
     build:
       context: .
-      dockerfile: Dockerfile.node
+      dockerfile: Dockerfile.bun
     container_name: ${PROJECT_NAME}-backend
     restart: always
     ports:
       - "3001:3001"
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:15432/${POSTGRES_DB}?schema=public
+      - DATABASE_URL=${DATABASE_URL}
       - OBJ_STORAGE_ADDR=${OBJ_STORAGE_ADDR}
       - OBJ_STORAGE_PORT=${OBJ_STORAGE_PORT}
-      - OBJ_ACCESS_KEY=${MINIO_ROOT_USER}
-      - OBJ_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - OBJ_ACCESS_KEY=${OBJ_ACCESS_KEY}
+      - OBJ_SECRET_KEY=${OBJ_SECRET_KEY}
       - OBJ_BUCKET=${OBJ_BUCKET}
-      - OBJ_STORAGE_SSL=true
+      - OBJ_STORAGE_SSL=${OBJ_STORAGE_SSL}
     # depends_on:
     #   - postgres
     #   - minio
     networks:
       - project-net
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
 volumes:
   project-data-v18:

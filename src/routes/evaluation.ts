@@ -414,8 +414,10 @@ evaluationRoute.get("/event/:eventId/results", async (c) => {
 
     // Calculate average scores
     const results = teams.map((team) => {
-      const presenter = team.participants[0];
-      const presenterName = presenter?.user.name || "Unknown";
+      const presenterNames = team.participants
+        .map((participant) => participant.user?.name)
+        .filter((name): name is string => Boolean(name));
+      const presenterName = presenterNames.length > 0 ? presenterNames.join(", ") : "Unknown";
 
       // Group results by committee member
       const byCommittee = new Map<string, { name: string; scores: Map<string, number> }>();

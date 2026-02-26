@@ -189,6 +189,7 @@ eventsRoute.get("/me/history", async (c) => {
       eventGroup: { not: "ORGANIZER" },
       event: {
         status: "PUBLISHED",
+        publicView: true,
         isHidden: false,
       },
     },
@@ -297,6 +298,7 @@ eventsRoute.get("/me/history", async (c) => {
       eventGroup: "ORGANIZER",
       event: {
         status: "PUBLISHED",
+        publicView: true,
         isHidden: false,
       },
     },
@@ -355,6 +357,7 @@ eventsRoute.get("/user/:username/history", async (c) => {
       eventGroup: { not: "ORGANIZER" },
       event: {
         status: "PUBLISHED",
+        publicView: true,
         isHidden: false,
       },
     },
@@ -463,6 +466,7 @@ eventsRoute.get("/user/:username/history", async (c) => {
       eventGroup: "ORGANIZER",
       event: {
         status: "PUBLISHED",
+        publicView: true,
         isHidden: false,
       },
     },

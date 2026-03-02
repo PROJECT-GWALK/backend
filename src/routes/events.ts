@@ -899,29 +899,27 @@ eventsRoute.get("/:id/rankings", async (c) => {
       voteCounts[v.teamId] = (voteCounts[v.teamId] || 0) + 1;
     });
 
-    let maxVotes = 0;
-    let winnerTeamId: string | null = null;
+    const votedTeams = Object.entries(voteCounts)
+      .map(([teamId, votes]) => {
+        const team = teams.find((t) => t.id === teamId);
+        if (!team) return null;
+        return { id: team.id, name: team.teamName, votes };
+      })
+      .filter((x): x is { id: string; name: string; votes: number } => Boolean(x))
+      .sort((a, b) => (b.votes !== a.votes ? b.votes - a.votes : a.name.localeCompare(b.name)));
 
-    Object.entries(voteCounts).forEach(([teamId, count]) => {
-      if (count > maxVotes) {
-        maxVotes = count;
-        winnerTeamId = teamId;
-      }
-    });
-
-    const winnerTeam = winnerTeamId ? teams.find((t) => t.id === winnerTeamId) : null;
+    const maxVotes = votedTeams.length > 0 ? votedTeams[0].votes : 0;
+    const winners = maxVotes > 0 ? votedTeams.filter((t) => t.votes === maxVotes) : [];
+    const winner = winners.length > 0 ? winners[0] : null;
 
     return {
       id: reward.id,
       name: reward.name,
+      description: reward.description,
       image: reward.image,
-      winner: winnerTeam
-        ? {
-            id: winnerTeam.id,
-            name: winnerTeam.teamName,
-            votes: maxVotes,
-          }
-        : null,
+      winner,
+      winners,
+      votes: votedTeams,
     };
   });
 

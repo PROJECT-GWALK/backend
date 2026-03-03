@@ -1530,12 +1530,12 @@ eventsRoute.put("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
   });
 
   // Permission Check:
-  // Only the Leader of THIS team can edit.
+  // Any member of THIS team can edit.
   if (!participant) return c.json({ message: "Forbidden" }, 403);
 
-  const isTeamLeader = participant.teamId === teamId && participant.isLeader;
+  const isMember = participant.teamId === teamId;
 
-  if (!isTeamLeader) {
+  if (!isMember) {
     return c.json({ message: "Forbidden" }, 403);
   }
 

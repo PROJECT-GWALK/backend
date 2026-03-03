@@ -114,7 +114,9 @@ eventsRoute.get("/", async (c) => {
   });
   const payload = events.map((e) => {
     const currentUserParticipant = e.participants.find((p) => p.userId === userId);
-    const organizer = e.participants.find((p) => p.eventGroup === "ORGANIZER");
+    const organizer =
+      e.participants.find((p) => p.eventGroup === "ORGANIZER" && p.isLeader) ||
+      e.participants.find((p) => p.eventGroup === "ORGANIZER");
     return {
       id: e.id,
       eventName: e.eventName,

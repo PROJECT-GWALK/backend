@@ -1586,7 +1586,7 @@ eventsRoute.get(
 
     if (!q || q.length < 2) return c.json({ message: "ok", candidates: [] });
 
-    const candidates = await prisma.eventParticipant.findMany({
+    const presenterCandidates = await prisma.eventParticipant.findMany({
       where: {
         eventId,
         eventGroup: "PRESENTER",
@@ -1595,6 +1595,7 @@ eventsRoute.get(
           OR: [
             { name: { contains: q } }, // Case insensitive usually depends on DB collation, or use mode: 'insensitive' for Postgres
             { username: { contains: q } },
+            { email: { contains: q } },
           ],
         },
       },
@@ -1602,15 +1603,39 @@ eventsRoute.get(
       take: 10,
     });
 
+    const participantCandidates = presenterCandidates.map((c) => ({
+      id: c.id,
+      userId: c.userId,
+      name: c.user.name,
+      username: c.user.username,
+      image: c.user.image,
+    }));
+
+    const remaining = Math.max(0, 10 - participantCandidates.length);
+    let extraUsers: { id: string; name: string | null; username: string | null; image: string | null }[] = [];
+    if (remaining > 0) {
+      extraUsers = await prisma.user.findMany({
+        where: {
+          OR: [{ name: { contains: q } }, { username: { contains: q } }, { email: { contains: q } }],
+          participants: { none: { eventId } },
+        },
+        select: { id: true, name: true, username: true, image: true },
+        take: remaining,
+      });
+    }
+
     return c.json({
       message: "ok",
-      candidates: candidates.map((c) => ({
-        id: c.id,
-        userId: c.userId,
-        name: c.user.name,
-        username: c.user.username,
-        image: c.user.image,
-      })),
+      candidates: [
+        ...participantCandidates,
+        ...extraUsers.map((u) => ({
+          id: u.id,
+          userId: u.id,
+          name: u.name,
+          username: u.username,
+          image: u.image,
+        })),
+      ],
     });
   },
 );
@@ -1662,7 +1687,27 @@ eventsRoute.post(
       where: { eventId, userId: userId },
     });
 
-    if (!target) return c.json({ message: "User not found in event" }, 404);
+    if (!target) {
+      const userExists = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true },
+      });
+      if (!userExists) return c.json({ message: "User not found" }, 404);
+
+      await prisma.eventParticipant.create({
+        data: {
+          eventId,
+          userId,
+          eventGroup: "PRESENTER",
+          teamId,
+          isLeader: false,
+          virtualReward: 0,
+        },
+      });
+
+      return c.json({ message: "ok" });
+    }
+
     if (target.teamId) return c.json({ message: "User already in a team" }, 400);
     if (target.eventGroup !== "PRESENTER")
       return c.json({ message: "User is not a presenter" }, 400);

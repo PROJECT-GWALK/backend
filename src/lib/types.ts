@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FileType } from "../generated/prisma/enums.js";
 
 // Admin Dashboard
 export const adminDashboardParams = z.object({
@@ -106,6 +107,11 @@ export const addTeamMemberSchema = z.object({
   userId: z.string(),
 });
 
+export const addParticipantSchema = z.object({
+  identifier: z.string().min(1),
+  role: z.enum(["ORGANIZER", "PRESENTER", "COMMITTEE", "GUEST"]),
+});
+
 // Files
 export const filesParamSchema = z.object({
   bucket: z.string(),
@@ -126,4 +132,19 @@ export const eventAndTeamIdParamSchema = z.object({
 export const eventAndParticipantIdParamSchema = z.object({
   id: z.string(),
   pid: z.string(),
+});
+
+// Event Settings Validation
+export const eventFileTypeSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().max(30),
+  description: z.string().max(240),
+  allowedFileTypes: z.array(z.nativeEnum(FileType)),
+  isRequired: z.boolean(),
+});
+
+export const specialRewardSchema = z.object({
+  name: z.string().max(30),
+  description: z.string().max(240),
+  image: z.string().nullable().optional(),
 });

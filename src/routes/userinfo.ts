@@ -43,38 +43,48 @@ userRoute.put("/", async (c) => {
   const minio = getMinio();
   const form = await c.req.parseBody();
 
-  const result = updateUserProfileSchema.safeParse(form);
-  if (!result.success) {
-    return c.json({ message: "Invalid input", errors: result.error }, 400);
+  try {
+    const result = updateUserProfileSchema.safeParse(form);
+    if (!result.success) {
+      return c.json({ message: "Invalid input", errors: result.error }, 400);
+    }
+
+    const { username, name, description, image } = result.data;
+
+    const updateData: any = {};
+    if (username) updateData.username = username;
+    if (name) updateData.name = name;
+    if (description) updateData.description = description;
+    if (image === "null") {
+      updateData.image = null;
+    }
+
+    const file = form["file"] as File | undefined;
+    if (file) {
+      const bucket = process.env.OBJ_BUCKET!;
+      const objectName = `user-avatars/${user.id}-${Date.now()}-${file.name}`;
+
+      const buffer = Buffer.from(await file.arrayBuffer());
+      await minio.putObject(bucket, objectName, buffer);
+
+      updateData.image = `/backend/files/${bucket}/${objectName}`;
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: updateData,
+    });
+
+    return c.json({ message: "ok", user: updatedUser });
+  } catch (err: unknown) {
+    if (typeof err === "object" && err !== null && "code" in err) {
+      const code = (err as { code?: string }).code;
+      if (code === "P2002") {
+        return c.json({ message: "Username already exists" }, 409);
+      }
+    }
+    return c.json({ message: "Failed to update user" }, 500);
   }
-
-  const { username, name, description, image } = result.data;
-
-  const updateData: any = {};
-  if (username) updateData.username = username;
-  if (name) updateData.name = name;
-  if (description) updateData.description = description;
-  if (image === "null") {
-    updateData.image = null;
-  }
-
-  const file = form["file"] as File | undefined;
-  if (file) {
-    const bucket = process.env.OBJ_BUCKET!;
-    const objectName = `user-avatars/${user.id}-${Date.now()}-${file.name}`;
-
-    const buffer = Buffer.from(await file.arrayBuffer());
-    await minio.putObject(bucket, objectName, buffer);
-
-    updateData.image = `/backend/files/${bucket}/${objectName}`;
-  }
-
-  const updatedUser = await prisma.user.update({
-    where: { id: user.id },
-    data: updateData,
-  });
-
-  return c.json({ message: "ok", user: updatedUser });
 });
 
 export const userProfileRoute = new Hono<{ Variables: { user: User | null } }>();

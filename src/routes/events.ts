@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { authMiddleware, optionalAuthMiddleware } from "../middlewares/auth.js";
 import { getMinio } from "../lib/minio.js";
@@ -17,9 +18,12 @@ import {
   updateTeamSchema,
   candidateQuerySchema,
   addTeamMemberSchema,
+  addParticipantSchema,
   idParamSchema,
   eventAndTeamIdParamSchema,
   eventAndParticipantIdParamSchema,
+  eventFileTypeSchema,
+  specialRewardSchema,
 } from "../lib/types.js";
 
 const eventsRoute = new Hono<{ Variables: { user: User | null } }>();
@@ -1233,6 +1237,75 @@ eventsRoute.post(
   },
 );
 
+eventsRoute.post(
+  "/:id/participants",
+  zValidator("param", idParamSchema),
+  zValidator("json", addParticipantSchema),
+  async (c) => {
+    const user = c.get("user");
+    const { id } = c.req.valid("param");
+    const { identifier, role } = c.req.valid("json");
+
+    if (!user) return c.json({ message: "Unauthorized" }, 401);
+
+    const organizer = await prisma.eventParticipant.findFirst({
+      where: { eventId: id, userId: user.id, eventGroup: "ORGANIZER" },
+    });
+    if (!organizer) return c.json({ message: "Forbidden" }, 403);
+
+    if (role === "ORGANIZER" && !organizer.isLeader) {
+      return c.json({ message: "Only organizer leader can add organizers" }, 403);
+    }
+
+    const event = await prisma.event.findUnique({ where: { id } });
+    if (!event) return c.json({ message: "Event not found" }, 404);
+
+    // Find User
+    const targetUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: identifier }, // Allow direct ID match
+          { email: { equals: identifier, mode: "insensitive" } },
+          { username: { equals: identifier, mode: "insensitive" } },
+          { name: { equals: identifier, mode: "insensitive" } },
+        ],
+      },
+    });
+
+    if (!targetUser) return c.json({ message: "User not found" }, 404);
+
+    const existing = await prisma.eventParticipant.findFirst({
+      where: { eventId: id, userId: targetUser.id },
+    });
+    if (existing) return c.json({ message: "User already joined" }, 400);
+
+    let virtualReward = 0;
+    if (role === "COMMITTEE") {
+      virtualReward = event.virtualRewardCommittee ?? 0;
+    } else if (role === "GUEST") {
+      virtualReward = event.virtualRewardGuest ?? 0;
+    }
+
+    const participant = await prisma.eventParticipant.create({
+      data: {
+        eventId: id,
+        userId: targetUser.id,
+        eventGroup: role,
+        isLeader: false,
+        virtualReward,
+      },
+      include: { user: true, team: { include: { files: true } } },
+    });
+
+    const result = {
+      ...participant,
+      virtualUsed: 0,
+    };
+
+    return c.json({ message: "ok", participant: result });
+  },
+);
+
 eventsRoute.get("/:id/participants", zValidator("param", idParamSchema), async (c) => {
   const user = c.get("user");
   const { id } = c.req.valid("param");
@@ -1468,6 +1541,9 @@ eventsRoute.post("/:id/teams", zValidator("param", idParamSchema), async (c) => 
   }
 
   if (file) {
+    if (file.size > 50 * 1024 * 1024) {
+      return c.json({ message: "File size exceeds 50MB" }, 400);
+    }
     const minio = getMinio();
     const bucket = process.env.OBJ_BUCKET!;
     const baseName = path.parse(file.name).name;
@@ -1552,6 +1628,9 @@ eventsRoute.put("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
   }
 
   if (file) {
+    if (file.size > 50 * 1024 * 1024) {
+      return c.json({ message: "File size exceeds 50MB" }, 400);
+    }
     const minio = getMinio();
     const bucket = process.env.OBJ_BUCKET!;
     const baseName = path.parse(file.name).name;
@@ -1732,14 +1811,23 @@ eventsRoute.get(
 
     const participant = await prisma.eventParticipant.findFirst({
       where: { eventId, userId: user.id },
-      include: { team: true, event: { select: { startView: true } } },
+      include: { team: true, event: { select: { startView: true, endJoinDate: true } } },
     });
 
     if (!participant) return c.json({ message: "Forbidden" }, 403);
 
     const now = new Date();
     const eventStarted = !participant.event.startView || now >= participant.event.startView;
-    if (!eventStarted && participant.eventGroup !== "ORGANIZER" && participant.teamId !== teamId) {
+    const submissionEnded = participant.event.endJoinDate
+      ? now >= participant.event.endJoinDate
+      : false;
+
+    if (
+      !eventStarted &&
+      participant.eventGroup !== "ORGANIZER" &&
+      (participant.eventGroup !== "COMMITTEE" || !submissionEnded) &&
+      participant.teamId !== teamId
+    ) {
       return c.json({ message: "Forbidden" }, 403);
     }
 
@@ -1822,7 +1910,13 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
   try {
     const event = await prisma.event.findUnique({
       where: { id: eventId },
-      select: { startView: true, status: true, publicView: true, isHidden: true },
+      select: {
+        startView: true,
+        status: true,
+        publicView: true,
+        isHidden: true,
+        endJoinDate: true,
+      },
     });
     if (!event) return c.json({ message: "Event not found" }, 404);
     if (event.status !== "PUBLISHED") return c.json({ message: "Event not published" }, 403);
@@ -1860,12 +1954,29 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
       if (!user) return c.json({ message: "Unauthorized" }, 401);
 
       const isOrganizer = await prisma.eventParticipant.findFirst({
-        where: { eventId, userId: user.id, eventGroup: "ORGANIZER" },
+        where: {
+          eventId,
+          userId: user.id,
+          eventGroup: "ORGANIZER",
+        },
         select: { id: true },
       });
 
+      const isCommittee = await prisma.eventParticipant.findFirst({
+        where: {
+          eventId,
+          userId: user.id,
+          eventGroup: "COMMITTEE",
+        },
+        select: { id: true },
+      });
+
+      const submissionEnded = event.endJoinDate ? now >= event.endJoinDate : false;
+
       const isMember = team.participants.some((p) => p.userId === user.id);
-      if (!isOrganizer && !isMember) return c.json({ message: "Forbidden" }, 403);
+      if (!isOrganizer && (!isCommittee || !submissionEnded) && !isMember) {
+        return c.json({ message: "Forbidden" }, 403);
+      }
     }
 
     // Get My Rewards info
@@ -1957,7 +2068,10 @@ eventsRoute.delete("/:id/teams/:teamId", async (c) => {
 eventsRoute.get("/:id/teams", async (c) => {
   const user = c.get("user");
   const eventId = c.req.param("id");
-  const event = await prisma.event.findUnique({ where: { id: eventId }, select: { startView: true } });
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    select: { startView: true, endJoinDate: true },
+  });
   if (!event) return c.json({ message: "Event not found" }, 404);
 
   const organizer = user
@@ -1967,9 +2081,17 @@ eventsRoute.get("/:id/teams", async (c) => {
       })
     : null;
 
+  const committee = user
+    ? await prisma.eventParticipant.findFirst({
+        where: { eventId, userId: user.id, eventGroup: "COMMITTEE" },
+        select: { id: true },
+      })
+    : null;
+
   const now = new Date();
   const eventStarted = !event.startView || now >= event.startView;
-  const canViewAll = eventStarted || !!organizer;
+  const submissionEnded = event.endJoinDate ? now >= event.endJoinDate : false;
+  const canViewAll = !!organizer || eventStarted || (!!committee && submissionEnded);
 
   const teams = await prisma.team.findMany({
     where: canViewAll ? { eventId } : { eventId, participants: { some: { userId: user?.id } } },
@@ -2117,12 +2239,18 @@ eventsRoute.post("/:id/teams/:teamId/files", async (c) => {
     });
   }
 
+  if (file && file.size > 50 * 1024 * 1024) {
+    return c.json({ message: "File size exceeds 50MB limit" }, 400);
+  }
+
   let fileUrl = "";
   if (file) {
     const minio = getMinio();
     const bucket = process.env.OBJ_BUCKET!;
+    // Sanitize filename to be safe but recognizable
+    const safeName = path.parse(file.name).name.replace(/[^a-z0-9]/gi, "_").toLowerCase();
     const ext = path.extname(file.name);
-    const objectName = `teams/${teamId}/${fileTypeId}-${Date.now()}${ext}`;
+    const objectName = `teams/${teamId}/${safeName}-${Date.now()}${ext}`;
     const buffer = Buffer.from(await file.arrayBuffer());
     await minio.putObject(bucket, objectName, buffer);
     fileUrl = `/backend/files/${bucket}/${objectName}`;
@@ -2422,22 +2550,32 @@ eventsRoute.put("/:id", async (c) => {
   }
 
   if (fileTypesData) {
+    // Validate
+    const validatedFileTypes: z.infer<typeof eventFileTypeSchema>[] = [];
+    for (const ft of fileTypesData) {
+      const result = eventFileTypeSchema.safeParse(ft);
+      if (!result.success) {
+        return c.json({ message: "Invalid submission requirement data", errors: result.error }, 400);
+      }
+      validatedFileTypes.push(result.data);
+    }
+
     const current = await prisma.eventFileType.findMany({
       where: { eventId: id },
       select: { id: true },
     });
     const currentIds = current.map((c) => c.id);
-    const incomingIds = fileTypesData
-      .filter((f: any) => f.id && currentIds.includes(f.id))
-      .map((f: any) => f.id);
+    const incomingIds = validatedFileTypes
+      .filter((f) => f.id && currentIds.includes(f.id))
+      .map((f) => f.id);
 
     const toDelete = currentIds.filter((cid) => !incomingIds.includes(cid));
-    const toUpdate = fileTypesData.filter((f: any) => f.id && currentIds.includes(f.id));
-    const toCreate = fileTypesData.filter((f: any) => !f.id || !currentIds.includes(f.id));
+    const toUpdate = validatedFileTypes.filter((f) => f.id && currentIds.includes(f.id));
+    const toCreate = validatedFileTypes.filter((f) => !f.id || !currentIds.includes(f.id));
 
     await prisma.$transaction([
       prisma.eventFileType.deleteMany({ where: { id: { in: toDelete } } }),
-      ...toUpdate.map((f: any) =>
+      ...toUpdate.map((f) =>
         prisma.eventFileType.update({
           where: { id: f.id },
           data: {
@@ -2449,7 +2587,7 @@ eventsRoute.put("/:id", async (c) => {
         }),
       ),
       prisma.eventFileType.createMany({
-        data: toCreate.map((f: any) => ({
+        data: toCreate.map((f) => ({
           eventId: id,
           name: f.name,
           description: f.description,
@@ -2549,11 +2687,14 @@ eventsRoute.post("/:id/special-rewards", async (c) => {
     if ("image" in body) data.image = body.image === "null" ? null : body.image;
   }
 
-  if (!data.name || typeof data.name !== "string" || data.name.trim().length < 1) {
-    return c.json({ message: "Reward name is required" }, 400);
+  const validation = specialRewardSchema.safeParse(data);
+  if (!validation.success) {
+    return c.json({ message: "Invalid reward data", errors: validation.error }, 400);
   }
+  const { name, description, image } = validation.data;
+
   const created = await prisma.specialReward.create({
-    data: { eventId, name: data.name, description: data.description, image: data.image },
+    data: { eventId, name, description, image },
   });
   return c.json({ message: "ok", reward: created });
 });
@@ -2602,8 +2743,16 @@ eventsRoute.put("/:id/special-rewards/:rewardId", async (c) => {
     if ("image" in body) data.image = body.image === "null" ? null : body.image;
   }
 
-  const updatedReward = await prisma.specialReward.update({ where: { id: rewardId }, data });
-  return c.json({ message: "ok", reward: updatedReward });
+  const validation = specialRewardSchema.safeParse(data);
+  if (!validation.success) {
+    return c.json({ message: "Invalid reward data", errors: validation.error }, 400);
+  }
+  const { name, description, image } = validation.data;
+
+  const updatedReward = await prisma.specialReward.update({
+    where: { id: rewardId },
+    data: { name, description, image },
+  });
 });
 
 eventsRoute.delete("/:id/special-rewards/:rewardId", async (c) => {

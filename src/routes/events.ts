@@ -1852,6 +1852,7 @@ eventsRoute.get(
           user: {
             select: {
               id: true,
+              username: true,
               name: true,
               image: true,
               participants: {
@@ -1875,6 +1876,7 @@ eventsRoute.get(
           user: {
             select: {
               id: true,
+              username: true,
               name: true,
               image: true,
               participants: {
@@ -1893,6 +1895,7 @@ eventsRoute.get(
       createdAt: comment.createdAt,
       user: {
         id: comment.user.id,
+        username: comment.user.username,
         name: comment.user.name,
         image: comment.user.image,
         role: comment.user.participants[0]?.eventGroup || "UNKNOWN",
@@ -2099,7 +2102,7 @@ eventsRoute.get("/:id/teams", async (c) => {
       participants: { include: { user: true } },
       files: { include: { fileType: true } },
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: { createdAt: "asc" },
   });
 
   if (teams.length === 0) return c.json({ message: "ok", teams: [] });

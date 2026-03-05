@@ -719,6 +719,7 @@ eventsActionRoute.get("/ratings", async (c) => {
           select: {
             name: true,
             image: true,
+            username: true,
           },
         },
       },

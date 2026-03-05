@@ -87,6 +87,81 @@ function verifyInvite(eventId: string, userId: string, role: keyof typeof roleMa
   return expected === sig;
 }
 
+type RankingTeamInput = {
+  id: string;
+  teamName: string;
+  imageCover: string | null;
+  createdAt: Date;
+  rewards: { reward: number; createdAt: Date }[];
+  categoryRewards: { amount: number; createdAt: Date }[];
+};
+
+type RankedTeamScore = {
+  id: string;
+  name: string;
+  imageCover: string | null;
+  totalReward: number;
+  scoreReachedAt: Date;
+  teamCreatedAt: Date;
+};
+
+const getScoreReachedAt = (team: RankingTeamInput, totalReward: number): Date => {
+  if (totalReward <= 0) return team.createdAt;
+
+  const timeline = [
+    ...team.rewards
+      .filter((r) => r.reward > 0)
+      .map((r) => ({ amount: r.reward, at: r.createdAt })),
+    ...team.categoryRewards
+      .filter((r) => r.amount > 0)
+      .map((r) => ({ amount: r.amount, at: r.createdAt })),
+  ].sort((a, b) => a.at.getTime() - b.at.getTime());
+
+  let cumulative = 0;
+  for (const item of timeline) {
+    cumulative += item.amount;
+    if (cumulative >= totalReward) return item.at;
+  }
+
+  return team.createdAt;
+};
+
+const buildTeamScores = (teams: RankingTeamInput[]): RankedTeamScore[] =>
+  teams.map((team) => {
+    const totalReward =
+      team.rewards.reduce((sum, r) => sum + r.reward, 0) +
+      team.categoryRewards.reduce((sum, r) => sum + r.amount, 0);
+
+    return {
+      id: team.id,
+      name: team.teamName,
+      imageCover: team.imageCover,
+      totalReward,
+      scoreReachedAt: getScoreReachedAt(team, totalReward),
+      teamCreatedAt: team.createdAt,
+    };
+  });
+
+const sortTeamScores = (scores: RankedTeamScore[]) =>
+  scores.sort((a, b) => {
+    if (b.totalReward !== a.totalReward) return b.totalReward - a.totalReward;
+    const reachedDiff = a.scoreReachedAt.getTime() - b.scoreReachedAt.getTime();
+    if (reachedDiff !== 0) return reachedDiff;
+    const createdDiff = a.teamCreatedAt.getTime() - b.teamCreatedAt.getTime();
+    if (createdDiff !== 0) return createdDiff;
+    return a.name.localeCompare(b.name, "th");
+  });
+
+const withCompetitionRank = (scores: RankedTeamScore[]) => {
+  let currentRank = 1;
+  return scores.map((team, index) => {
+    if (index > 0 && team.totalReward < scores[index - 1].totalReward) {
+      currentRank = index + 1;
+    }
+    return { ...team, rank: currentRank };
+  });
+};
+
 eventsRoute.get("/", async (c) => {
   const user = c.get("user");
   // Use a dummy UUID if user is not logged in to prevent fetching all participants
@@ -262,17 +337,9 @@ eventsRoute.get("/me/history", async (c) => {
           include: { rewards: true, categoryRewards: true },
         });
 
-        const scores = allTeams.map((t) => ({
-          id: t.id,
-          score:
-            t.rewards.reduce((acc, r) => acc + r.reward, 0) +
-            t.categoryRewards.reduce((acc, r) => acc + r.amount, 0),
-        }));
-
-        scores.sort((a, b) => b.score - a.score);
-
-        const index = scores.findIndex((t) => t.id === teamId);
-        if (index !== -1) rank = index + 1;
+        const rankedTeams = withCompetitionRank(sortTeamScores(buildTeamScores(allTeams)));
+        const myTeam = rankedTeams.find((team) => team.id === teamId);
+        rank = myTeam?.rank;
       }
 
       const userRating = await prisma.eventRating.findUnique({
@@ -430,17 +497,9 @@ eventsRoute.get("/user/:username/history", async (c) => {
           include: { rewards: true, categoryRewards: true },
         });
 
-        const scores = allTeams.map((t) => ({
-          id: t.id,
-          score:
-            t.rewards.reduce((acc, r) => acc + r.reward, 0) +
-            t.categoryRewards.reduce((acc, r) => acc + r.amount, 0),
-        }));
-
-        scores.sort((a, b) => b.score - a.score);
-
-        const index = scores.findIndex((t) => t.id === teamId);
-        if (index !== -1) rank = index + 1;
+        const rankedTeams = withCompetitionRank(sortTeamScores(buildTeamScores(allTeams)));
+        const myTeam = rankedTeams.find((team) => team.id === teamId);
+        rank = myTeam?.rank;
       }
 
       const userRating = await prisma.eventRating.findUnique({
@@ -542,19 +601,10 @@ eventsRoute.get("/:id/presenter/stats", async (c) => {
     include: { rewards: true, categoryRewards: true },
   });
 
-  const teamScores = allTeams.map((t) => ({
-    id: t.id,
-    score:
-      t.rewards.reduce((acc, r) => acc + r.reward, 0) +
-      t.categoryRewards.reduce((acc, r) => acc + r.amount, 0),
-  }));
-
-  // Sort descending
-  teamScores.sort((a, b) => b.score - a.score);
-
-  const myRankIndex = teamScores.findIndex((t) => t.id === teamId);
-  const myRank = myRankIndex !== -1 ? myRankIndex + 1 : "-";
-  const myScore = teamScores.find((t) => t.id === teamId)?.score || 0;
+  const rankedTeams = withCompetitionRank(sortTeamScores(buildTeamScores(allTeams)));
+  const myTeam = rankedTeams.find((team) => team.id === teamId);
+  const myRank = myTeam?.rank ?? "-";
+  const myScore = myTeam?.totalReward ?? 0;
 
   // 3. Comments Breakdown
   const comments = await prisma.comment.findMany({
@@ -877,25 +927,12 @@ eventsRoute.get("/:id/rankings", async (c) => {
     },
   });
 
-  const teamScores = teams.map((team) => {
-    const totalReward =
-      team.rewards.reduce((sum, r) => sum + r.reward, 0) +
-      team.categoryRewards.reduce((sum, r) => sum + r.amount, 0);
-    return {
-      id: team.id,
-      name: team.teamName,
-      totalReward,
-      imageCover: team.imageCover,
-    };
-  });
-
-  // Sort by Total Reward (Desc)
-  teamScores.sort((a, b) => b.totalReward - a.totalReward);
-
-  // Assign Rank
-  const rankings = teamScores.map((t, index) => ({
-    ...t,
-    rank: index + 1,
+  const rankings = withCompetitionRank(sortTeamScores(buildTeamScores(teams))).map((team) => ({
+    id: team.id,
+    name: team.name,
+    totalReward: team.totalReward,
+    imageCover: team.imageCover,
+    rank: team.rank,
   }));
 
   // Special Rewards Winners

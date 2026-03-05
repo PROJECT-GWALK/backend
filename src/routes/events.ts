@@ -1207,8 +1207,8 @@ eventsRoute.post(
     } else if (targetRole === "GUEST") {
       const now = new Date();
       if (event.startView && now < event.startView) {
-        // Allow if in viewSoon (after endJoinDate but before startView)
-        if (!event.endJoinDate || now <= event.endJoinDate) {
+        const guestOpenAt = new Date(event.startView.getTime() - 60 * 60 * 1000);
+        if (now < guestOpenAt) {
           return c.json({ message: "Not in view period" }, 400);
         }
       }

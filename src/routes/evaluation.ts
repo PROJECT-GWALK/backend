@@ -262,6 +262,33 @@ evaluationRoute.post(
         );
       }
 
+      const event = await prisma.event.findUnique({
+        where: { id: eventId },
+        select: { startView: true, endView: true },
+      });
+
+      if (!event) {
+        return c.json({ message: "Event not found" }, 404);
+      }
+
+      const now = new Date();
+      const startTime = event.startView ? new Date(event.startView) : null;
+      const gradingDeadline = event.endView
+        ? new Date(new Date(event.endView).getTime() + 48 * 60 * 60 * 1000)
+        : null;
+      const gradingWindowOpen = startTime ? now >= startTime : true;
+      const gradingWindowClosed = gradingDeadline ? now > gradingDeadline : false;
+
+      if (!gradingWindowOpen || gradingWindowClosed) {
+        return c.json(
+          {
+            message:
+              "Grading is available during the event and up to 48 hours after it ends.",
+          },
+          403,
+        );
+      }
+
       // Verify team exists in event
       const team = await prisma.team.findFirst({
         where: { id: teamId, eventId },

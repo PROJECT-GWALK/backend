@@ -326,14 +326,14 @@ eventsActionRoute.put(
       where: {
         eventId: eventId,
         userId: user.id,
-        eventGroup: "COMMITTEE",
+        eventGroup: { in: ["COMMITTEE", "GUEST"] },
       },
       include: { event: true },
     });
 
     if (!participant) {
       return c.json(
-        { message: "You are not a committee member in this event" },
+        { message: "You are not a participant (Committee/Guest) in this event" },
         403,
       );
     }
@@ -367,6 +367,12 @@ eventsActionRoute.put(
 
     if (rewards.length !== rewardIds.length) {
       return c.json({ message: "Some rewards not found or invalid" }, 400);
+    }
+    if (
+      participant.eventGroup === "GUEST" &&
+      rewards.some((r) => !r.allowGuestVote)
+    ) {
+      return c.json({ message: "Some rewards are not available for guests" }, 400);
     }
 
     try {
@@ -460,14 +466,14 @@ eventsActionRoute.post(
       where: {
         eventId: eventId,
         userId: user.id,
-        eventGroup: "COMMITTEE",
+        eventGroup: { in: ["COMMITTEE", "GUEST"] },
       },
       include: { event: true },
     });
 
     if (!participant) {
       return c.json(
-        { message: "You are not a committee member in this event" },
+        { message: "You are not a participant (Committee/Guest) in this event" },
         403,
       );
     }

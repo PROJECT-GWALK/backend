@@ -316,6 +316,7 @@ model SpecialReward {
   name        String
   description String?
   image       String?
+  allowGuestVote Boolean @default(false)
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
 
   event Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)

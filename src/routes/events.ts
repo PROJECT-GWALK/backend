@@ -675,7 +675,7 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
     include: {
       fileTypes: true,
       vrCategories: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
-      specialRewards: true,
+      specialRewards: { orderBy: { createdAt: "asc" } },
       participants: { include: { user: true, team: { include: { files: true } } } },
     },
   });
@@ -829,6 +829,10 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
   // Unused Awards (for the current user)
   let awardsUnused: typeof event.specialRewards = [];
   if (user) {
+    const eligibleRewards =
+      myParticipant?.eventGroup === "GUEST"
+        ? event.specialRewards.filter((r) => r.allowGuestVote)
+        : event.specialRewards;
     const myVotes = await prisma.specialRewardVote.findMany({
       where: {
         reward: { eventId: id },
@@ -848,9 +852,9 @@ eventsRoute.get("/:id", zValidator("param", idParamSchema), async (c) => {
 
       // Filter out rewards already voted for
       const votedRewardIds = new Set(myRealVotes.map((v) => v.rewardId));
-      awardsUnused = event.specialRewards.filter((r) => !votedRewardIds.has(r.id));
+      awardsUnused = eligibleRewards.filter((r) => !votedRewardIds.has(r.id));
     } else {
-      awardsUnused = event.specialRewards;
+      awardsUnused = eligibleRewards;
     }
   } else {
     awardsUnused = event.specialRewards;
@@ -2006,7 +2010,7 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
         where: {
           eventId,
           userId: user.id,
-          eventGroup: "COMMITTEE",
+          eventGroup: { in: ["COMMITTEE", "GUEST"] },
         },
         select: { id: true },
       });
@@ -2031,7 +2035,7 @@ eventsRoute.get("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSch
       if (reward) myReward = reward.reward;
 
       const myParticipant = await prisma.eventParticipant.findFirst({
-        where: { eventId, userId: user.id, eventGroup: "COMMITTEE" },
+        where: { eventId, userId: user.id, eventGroup: { in: ["COMMITTEE", "GUEST"] } },
       });
 
       if (myParticipant) {
@@ -2123,7 +2127,7 @@ eventsRoute.get("/:id/teams", async (c) => {
 
   const committee = user
     ? await prisma.eventParticipant.findFirst({
-        where: { eventId, userId: user.id, eventGroup: "COMMITTEE" },
+        where: { eventId, userId: user.id, eventGroup: { in: ["COMMITTEE", "GUEST"] } },
         select: { id: true },
       })
     : null;
@@ -2189,7 +2193,7 @@ eventsRoute.get("/:id/teams", async (c) => {
     });
 
     const myParticipant = await prisma.eventParticipant.findFirst({
-      where: { eventId, userId: user.id, eventGroup: "COMMITTEE" },
+      where: { eventId, userId: user.id, eventGroup: { in: ["COMMITTEE", "GUEST"] } },
     });
 
     if (myParticipant) {
@@ -2704,6 +2708,9 @@ eventsRoute.post("/:id/special-rewards", async (c) => {
     const form = await c.req.parseBody();
     if (typeof form["name"] === "string") data.name = String(form["name"]);
     if (typeof form["description"] === "string") data.description = String(form["description"]);
+    if (typeof form["allowGuestVote"] === "string") {
+      data.allowGuestVote = form["allowGuestVote"] === "true";
+    }
     const imageField = form["image"];
     const fileField = form["file"];
     if (typeof imageField === "string" && imageField === "null") {
@@ -2725,16 +2732,20 @@ eventsRoute.post("/:id/special-rewards", async (c) => {
     if (typeof body.name === "string") data.name = body.name;
     if (typeof body.description === "string") data.description = body.description;
     if ("image" in body) data.image = body.image === "null" ? null : body.image;
+    if (typeof body.allowGuestVote === "boolean") data.allowGuestVote = body.allowGuestVote;
+    if (typeof body.allowGuestVote === "string") {
+      data.allowGuestVote = body.allowGuestVote === "true";
+    }
   }
 
   const validation = specialRewardSchema.safeParse(data);
   if (!validation.success) {
     return c.json({ message: "Invalid reward data", errors: validation.error }, 400);
   }
-  const { name, description, image } = validation.data;
+  const { name, description, image, allowGuestVote } = validation.data;
 
   const created = await prisma.specialReward.create({
-    data: { eventId, name, description, image },
+    data: { eventId, name, description, image, allowGuestVote },
   });
   return c.json({ message: "ok", reward: created });
 });
@@ -2760,6 +2771,9 @@ eventsRoute.put("/:id/special-rewards/:rewardId", async (c) => {
     const form = await c.req.parseBody();
     if (typeof form["name"] === "string") data.name = String(form["name"]);
     if (typeof form["description"] === "string") data.description = String(form["description"]);
+    if (typeof form["allowGuestVote"] === "string") {
+      data.allowGuestVote = form["allowGuestVote"] === "true";
+    }
     const imageField = form["image"];
     const fileField = form["file"];
     if (typeof imageField === "string" && imageField === "null") {
@@ -2781,18 +2795,23 @@ eventsRoute.put("/:id/special-rewards/:rewardId", async (c) => {
     if (typeof body.name === "string") data.name = body.name;
     if (typeof body.description === "string") data.description = body.description;
     if ("image" in body) data.image = body.image === "null" ? null : body.image;
+    if (typeof body.allowGuestVote === "boolean") data.allowGuestVote = body.allowGuestVote;
+    if (typeof body.allowGuestVote === "string") {
+      data.allowGuestVote = body.allowGuestVote === "true";
+    }
   }
 
   const validation = specialRewardSchema.safeParse(data);
   if (!validation.success) {
     return c.json({ message: "Invalid reward data", errors: validation.error }, 400);
   }
-  const { name, description, image } = validation.data;
+  const { name, description, image, allowGuestVote } = validation.data;
 
   const updatedReward = await prisma.specialReward.update({
     where: { id: rewardId },
-    data: { name, description, image },
+    data: { name, description, image, allowGuestVote },
   });
+  return c.json({ message: "ok", reward: updatedReward });
 });
 
 eventsRoute.delete("/:id/special-rewards/:rewardId", async (c) => {

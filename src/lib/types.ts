@@ -147,4 +147,5 @@ export const specialRewardSchema = z.object({
   name: z.string().max(30),
   description: z.string().max(240),
   image: z.string().nullable().optional(),
+  allowGuestVote: z.boolean().optional(),
 });

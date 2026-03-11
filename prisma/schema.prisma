@@ -103,6 +103,7 @@ model Event {
   imageCover             String?
   hasCommittee           Boolean     @default(false)
   gradingEnabled         Boolean     @default(true)
+  gradingDaysAfterEnd    Int         @default(2)
   publicJoin             Boolean     @default(true)
   passwordJoin           String?
   startJoinDate          DateTime?   @db.Timestamptz(3)

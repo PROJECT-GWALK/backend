@@ -2551,6 +2551,10 @@ eventsRoute.put("/:id", async (c) => {
       data.hasCommittee = (form["hasCommittee"] as string) === "true";
     if (typeof form["gradingEnabled"] === "string")
       data.gradingEnabled = (form["gradingEnabled"] as string) === "true";
+    if (typeof form["gradingDaysAfterEnd"] === "string") {
+      const n = parseInt(form["gradingDaysAfterEnd"] as string);
+      if (!Number.isNaN(n)) data.gradingDaysAfterEnd = Math.max(0, Math.floor(n));
+    }
     if (typeof form["currentStep"] === "string") {
       const cs = parseInt(form["currentStep"] as string);
       if (!Number.isNaN(cs)) data.currentStep = cs;
@@ -2658,6 +2662,10 @@ eventsRoute.put("/:id", async (c) => {
       hasCommittee: typeof body.hasCommittee === "boolean" ? body.hasCommittee : event.hasCommittee,
       gradingEnabled:
         typeof body.gradingEnabled === "boolean" ? body.gradingEnabled : event.gradingEnabled,
+      gradingDaysAfterEnd:
+        typeof body.gradingDaysAfterEnd === "number"
+          ? Math.max(0, Math.floor(body.gradingDaysAfterEnd))
+          : event.gradingDaysAfterEnd,
       unitReward: typeof body.unitReward === "string" ? body.unitReward : event.unitReward,
     } as any;
     if ("imageCover" in body)

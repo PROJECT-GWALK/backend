@@ -66,6 +66,93 @@ eventsRoute.use("*", async (c, next) => {
   return authMiddleware(c as any, next);
 });
 
+eventsRoute.get("/:eventId/export-data", async (c) => {
+  const eventId = c.req.param("eventId");
+  const user = c.get("user");
+  if (!user) return c.json({ message: "Unauthorized" }, 401);
+
+  // Check role: Must be Organizer (in participants) or Admin
+  const participant = await prisma.eventParticipant.findFirst({
+    where: { eventId, userId: user.id, eventGroup: "ORGANIZER" },
+  });
+
+  if (!participant && user.role !== "ADMIN") {
+    return c.json({ message: "Forbidden" }, 403);
+  }
+
+  try {
+    const teams = await prisma.team.findMany({
+      where: { eventId },
+      orderBy: { createdAt: "asc" },
+      select: { 
+        id: true, 
+        teamName: true, 
+        createdAt: true,
+        participants: {
+          select: { userId: true }
+        }
+      },
+    });
+
+    const participants = await prisma.eventParticipant.findMany({
+      where: { eventId },
+      select: { userId: true, eventGroup: true, user: { select: { name: true } } },
+    });
+    
+    const userMap: Record<string, { role: string; name: string }> = {};
+    participants.forEach((p) => {
+      if (p.eventGroup) userMap[p.userId] = { role: p.eventGroup, name: p.user.name || "Unknown" };
+    });
+
+    const teamRewards = await prisma.teamReward.findMany({
+      where: { eventId },
+    });
+
+    const teamRewardCategories = await prisma.teamRewardCategory.findMany({
+      where: { eventId },
+    });
+
+    const specialRewards = await prisma.specialReward.findMany({
+      where: { eventId },
+    });
+
+    const specialRewardVotes = await prisma.specialRewardVote.findMany({
+      where: { reward: { eventId } },
+      include: { reward: true },
+    });
+
+    const comments = await prisma.comment.findMany({
+      where: { eventId },
+      include: { user: { select: { name: true } } },
+    });
+
+    const evaluationCriteria = await prisma.evaluationCriteria.findMany({
+      where: { eventId },
+      orderBy: { sortOrder: "asc" },
+    });
+
+    const evaluationResults = await prisma.evaluationResult.findMany({
+      where: { eventId },
+      include: { criteria: true },
+    });
+    
+    return c.json({
+      teams,
+      userMap,
+      teamRewards,
+      teamRewardCategories,
+      specialRewards,
+      specialRewardVotes,
+      comments,
+      evaluationCriteria,
+      evaluationResults,
+    });
+  } catch (error) {
+    console.error("Export error:", error);
+    return c.json({ message: "Internal server error" }, 500);
+  }
+});
+
 const INVITE_SECRET = process.env.INVITE_SECRET || "default-secret";
 const roleMap = {
   presenter: "PRESENTER",

@@ -264,7 +264,7 @@ evaluationRoute.post(
 
       const event = await prisma.event.findUnique({
         where: { id: eventId },
-        select: { startView: true, endView: true },
+        select: { startView: true, endView: true, gradingDaysAfterEnd: true },
       });
 
       if (!event) {
@@ -273,17 +273,24 @@ evaluationRoute.post(
 
       const now = new Date();
       const startTime = event.startView ? new Date(event.startView) : null;
+      const gradingDaysAfterEnd = event.gradingDaysAfterEnd ?? 2;
       const gradingDeadline = event.endView
-        ? new Date(new Date(event.endView).getTime() + 48 * 60 * 60 * 1000)
+        ? new Date(
+            new Date(event.endView).getTime() + gradingDaysAfterEnd * 24 * 60 * 60 * 1000,
+          )
         : null;
       const gradingWindowOpen = startTime ? now >= startTime : true;
       const gradingWindowClosed = gradingDeadline ? now > gradingDeadline : false;
 
       if (!gradingWindowOpen || gradingWindowClosed) {
+        const daysLabel =
+          gradingDaysAfterEnd === 1 ? "1 day" : `${gradingDaysAfterEnd} days`;
         return c.json(
           {
             message:
-              "Grading is available during the event and up to 48 hours after it ends.",
+              gradingDaysAfterEnd > 0
+                ? `Grading is available during the event and up to ${daysLabel} after it ends.`
+                : "Grading is available during the event only.",
           },
           403,
         );

@@ -5,6 +5,7 @@ import { authMiddleware } from "../middlewares/auth.js";
 import { adminOnly } from "../middlewares/adminOnly.js";
 import { prisma } from "../lib/prisma.js";
 import { adminDashboardParams, updateParticipantSchema } from "../lib/types.js";
+import { createLog } from "../lib/logger.js";
 
 const adminDashboard = new Hono();
 
@@ -141,13 +142,13 @@ adminDashboard
   })
 
   .get("/users", async (c) => {
-    const count = await prisma.user.count();
+    const count = await prisma.user.count({ where: { deletedAt: null } });
 
     return c.json({ message: "ok", totalUsers: count });
   })
 
   .get("/events", async (c) => {
-    const count = await prisma.event.count();
+    const count = await prisma.event.count({ where: { deletedAt: null } });
 
     return c.json({ message: "ok", totalEvents: count });
   })
@@ -162,7 +163,7 @@ adminDashboard
     const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") || "20", 10) || 20));
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const where: any = { deletedAt: null };
     if (q) where.eventName = { contains: q, mode: "insensitive" };
     if (status) where.status = status;
 
@@ -183,7 +184,7 @@ adminDashboard
           publicView: true,
           publicJoin: true,
           isHidden: true,
-          _count: { select: { participants: true, teams: true } },
+          _count: { select: { participants: { where: { deletedAt: null } }, teams: { where: { deletedAt: null } } } },
         },
       }),
       prisma.event.count({ where }),
@@ -222,10 +223,11 @@ adminDashboard
     async (c) => {
       const { eventId } = c.req.valid("param");
 
-      const event = await prisma.event.findUnique({
-        where: { id: eventId },
+      const event = await prisma.event.findFirst({
+        where: { id: eventId, deletedAt: null },
         include: {
           participants: {
+            where: { deletedAt: null },
             include: {
               user: {
                 select: {
@@ -242,8 +244,10 @@ adminDashboard
             orderBy: { id: "asc" },
           },
           teams: {
+            where: { deletedAt: null },
             include: {
               participants: {
+                where: { deletedAt: null },
                 include: {
                   user: {
                     select: {
@@ -277,13 +281,22 @@ adminDashboard
       const { eventId } = c.req.valid("param");
       const body = c.req.valid("json");
 
-      const existing = await prisma.event.findUnique({ where: { id: eventId } });
+      const existing = await prisma.event.findFirst({ where: { id: eventId, deletedAt: null } });
       if (!existing) return c.json({ message: "Event not found" }, 404);
 
       const updated = await prisma.event.update({
         where: { id: eventId },
         data: body,
       });
+
+      const admin = c.get("user");
+      await createLog(
+        admin.id,
+        "UPDATE_EVENT",
+        `Updated event ${eventId} (${updated.eventName})`,
+        c.req.header("x-forwarded-for"),
+        c.req.header("user-agent")
+      );
 
       return c.json({ message: "ok", event: updated });
     },
@@ -295,10 +308,20 @@ adminDashboard
     async (c) => {
       const { eventId } = c.req.valid("param");
 
-      const existing = await prisma.event.findUnique({ where: { id: eventId } });
+      const existing = await prisma.event.findFirst({ where: { id: eventId, deletedAt: null } });
       if (!existing) return c.json({ message: "Event not found" }, 404);
 
-      await prisma.event.delete({ where: { id: eventId } });
+      await prisma.event.update({ where: { id: eventId }, data: { deletedAt: new Date() } });
+
+      const admin = c.get("user");
+      await createLog(
+        admin.id,
+        "DELETE_EVENT",
+        `Deleted event ${eventId} (${existing.eventName})`,
+        c.req.header("x-forwarded-for"),
+        c.req.header("user-agent")
+      );
+
       return c.json({ message: "ok", deletedId: eventId });
     },
   )
@@ -312,7 +335,7 @@ adminDashboard
       const body = c.req.valid("json");
 
       const existing = await prisma.eventParticipant.findFirst({
-        where: { id: pid, eventId },
+        where: { id: pid, eventId, deletedAt: null },
       });
       if (!existing) return c.json({ message: "Participant not found" }, 404);
 
@@ -332,7 +355,7 @@ adminDashboard
         data.teamId = null;
         data.isLeader = false;
       } else if (body.teamId) {
-        const team = await prisma.team.findUnique({ where: { id: body.teamId } });
+        const team = await prisma.team.findFirst({ where: { id: body.teamId, deletedAt: null } });
         if (!team || team.eventId !== eventId) {
           return c.json({ message: "Team not found" }, 404);
         }
@@ -350,7 +373,7 @@ adminDashboard
             where: { teamId: existing.teamId },
             data: { teamId: null, isLeader: false },
           });
-          await prisma.team.delete({ where: { id: existing.teamId } });
+          await prisma.team.update({ where: { id: existing.teamId }, data: { deletedAt: new Date() } });
           data.teamId = null;
           data.isLeader = false;
         } else {
@@ -381,6 +404,15 @@ adminDashboard
         include: { user: true, team: true },
       });
 
+      const admin = c.get("user");
+      await createLog(
+        admin.id,
+        "UPDATE_PARTICIPANT",
+        `Updated participant ${pid} in event ${eventId}`,
+        c.req.header("x-forwarded-for"),
+        c.req.header("user-agent")
+      );
+
       return c.json({ message: "ok", participant: updated });
     },
   )
@@ -392,14 +424,23 @@ adminDashboard
       const { eventId, pid } = c.req.valid("param");
 
       const existing = await prisma.eventParticipant.findFirst({
-        where: { id: pid, eventId },
+        where: { id: pid, eventId, deletedAt: null },
       });
       if (!existing) return c.json({ message: "Participant not found" }, 404);
 
       const teamId = existing.teamId;
       const wasLeader = existing.isLeader;
 
-      await prisma.eventParticipant.delete({ where: { id: pid } });
+      await prisma.eventParticipant.update({ where: { id: pid }, data: { deletedAt: new Date() } });
+
+      const admin = c.get("user");
+      await createLog(
+        admin.id,
+        "DELETE_PARTICIPANT",
+        `Deleted participant ${pid} from event ${eventId}`,
+        c.req.header("x-forwarded-for"),
+        c.req.header("user-agent")
+      );
 
       if (teamId) {
         if (wasLeader) {
@@ -407,19 +448,19 @@ adminDashboard
             where: { teamId },
             data: { teamId: null, isLeader: false },
           });
-          await prisma.team.delete({ where: { id: teamId } });
+          await prisma.team.update({ where: { id: teamId }, data: { deletedAt: new Date() } });
         } else {
-          const remaining = await prisma.eventParticipant.count({ where: { teamId } });
+          const remaining = await prisma.eventParticipant.count({ where: { teamId, deletedAt: null } });
           if (remaining === 0) {
-            await prisma.team.delete({ where: { id: teamId } });
+            await prisma.team.update({ where: { id: teamId }, data: { deletedAt: new Date() } });
           } else {
             const leader = await prisma.eventParticipant.findFirst({
-              where: { teamId, isLeader: true },
+              where: { teamId, isLeader: true, deletedAt: null },
               select: { id: true },
             });
             if (!leader) {
               const nextLeader = await prisma.eventParticipant.findFirst({
-                where: { teamId },
+                where: { teamId, deletedAt: null },
                 orderBy: { id: "asc" },
                 select: { id: true },
               });
@@ -446,13 +487,22 @@ adminDashboard
       const { eventId, teamId } = c.req.valid("param");
       const body = c.req.valid("json");
 
-      const existing = await prisma.team.findUnique({ where: { id: teamId } });
+      const existing = await prisma.team.findFirst({ where: { id: teamId, deletedAt: null } });
       if (!existing || existing.eventId !== eventId) return c.json({ message: "Team not found" }, 404);
 
       const updated = await prisma.team.update({
         where: { id: teamId },
         data: body,
       });
+
+      const admin = c.get("user");
+      await createLog(
+        admin.id,
+        "UPDATE_TEAM",
+        `Updated team ${teamId} (${updated.teamName})`,
+        c.req.header("x-forwarded-for"),
+        c.req.header("user-agent")
+      );
 
       return c.json({ message: "ok", team: updated });
     },
@@ -464,7 +514,7 @@ adminDashboard
     async (c) => {
       const { eventId, teamId } = c.req.valid("param");
 
-      const existing = await prisma.team.findUnique({ where: { id: teamId } });
+      const existing = await prisma.team.findFirst({ where: { id: teamId, deletedAt: null } });
       if (!existing || existing.eventId !== eventId) return c.json({ message: "Team not found" }, 404);
 
       await prisma.eventParticipant.updateMany({
@@ -472,7 +522,16 @@ adminDashboard
         data: { teamId: null, isLeader: false },
       });
 
-      await prisma.team.delete({ where: { id: teamId } });
+      await prisma.team.update({ where: { id: teamId }, data: { deletedAt: new Date() } });
+
+      const admin = c.get("user");
+      await createLog(
+        admin.id,
+        "DELETE_TEAM",
+        `Deleted team ${teamId} (${existing.teamName})`,
+        c.req.header("x-forwarded-for"),
+        c.req.header("user-agent")
+      );
 
       return c.json({ message: "ok" });
     },

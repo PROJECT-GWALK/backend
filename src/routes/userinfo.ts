@@ -23,8 +23,8 @@ userRoute
       role: user.role,
     };
 
-    const ban = await prisma.userBan.findUnique({
-      where: { email: user.email! },
+    const ban = await prisma.userBan.findFirst({
+      where: { email: user.email!, deletedAt: null },
     });
 
     let banned = false;
@@ -107,6 +107,8 @@ userProfileRoute.get("/", async (c) => {
     ];
   }
 
+  whereClause.deletedAt = null;
+
   let orderBy: any = { createdAt: "desc" };
   if (sort === "most_active") {
     orderBy = { participants: { _count: "desc" } };
@@ -126,6 +128,7 @@ userProfileRoute.get("/", async (c) => {
         role: true,
         createdAt: true,
         participants: {
+          where: { deletedAt: null },
           select: {
             eventGroup: true
           }
@@ -174,7 +177,7 @@ userProfileRoute.get("/:username", async (c) => {
   }
 
   const user = await prisma.user.findFirst({
-    where: { username },
+    where: { username, deletedAt: null },
   });
 
   if (!user) {

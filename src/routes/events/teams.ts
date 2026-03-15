@@ -16,6 +16,36 @@ import {
 
 const teamsRoute = new Hono<{ Variables: { user: User | null } }>();
 
+const getProjectDataUpdateError = (event: {
+  startJoinDate: Date | null;
+  endJoinDate: Date | null;
+  allowProjectDataUpdate: boolean;
+}) => {
+  if (event.allowProjectDataUpdate) return null;
+  const now = new Date();
+  if (event.startJoinDate && now < event.startJoinDate) {
+    return "Not in submission period";
+  }
+  if (event.endJoinDate && now > event.endJoinDate) {
+    return "Submission period has ended";
+  }
+  return null;
+};
+
+const isSafePublicHttpUrl = (value: string) => {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    if (!parsed.hostname) return false;
+    const host = parsed.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") return false;
+    if (parsed.username || parsed.password) return false;
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 teamsRoute.post("/:id/teams", zValidator("param", idParamSchema), async (c) => {
   const user = c.get("user");
   const { id: eventId } = c.req.valid("param");
@@ -60,13 +90,9 @@ teamsRoute.post("/:id/teams", zValidator("param", idParamSchema), async (c) => {
   const event = await prisma.event.findFirst({ where: { id: eventId, deletedAt: null } });
   if (!event) return c.json({ message: "Event not found" }, 404);
 
-  // Check submission period
-  const now = new Date();
-  if (event.startJoinDate && now < event.startJoinDate) {
-    return c.json({ message: "Not in submission period" }, 400);
-  }
-  if (event.endJoinDate && now > event.endJoinDate) {
-    return c.json({ message: "Submission period has ended" }, 400);
+  const updateError = getProjectDataUpdateError(event);
+  if (updateError) {
+    return c.json({ message: updateError }, 400);
   }
 
   if (event.maxTeams) {
@@ -164,13 +190,9 @@ teamsRoute.put("/:id/teams/:teamId", zValidator("param", eventAndTeamIdParamSche
   const event = await prisma.event.findFirst({ where: { id: eventId, deletedAt: null } });
   if (!event) return c.json({ message: "Event not found" }, 404);
 
-  // Check submission period
-  const now = new Date();
-  if (event.startJoinDate && now < event.startJoinDate) {
-    return c.json({ message: "Not in submission period" }, 400);
-  }
-  if (event.endJoinDate && now > event.endJoinDate) {
-    return c.json({ message: "Submission period has ended" }, 400);
+  const updateError = getProjectDataUpdateError(event);
+  if (updateError) {
+    return c.json({ message: updateError }, 400);
   }
 
   if (file) {
@@ -236,13 +258,9 @@ teamsRoute.post(
     const event = await prisma.event.findFirst({ where: { id: eventId, deletedAt: null } });
     if (!event) return c.json({ message: "Event not found" }, 404);
 
-    // Check submission period
-    const now = new Date();
-    if (event.startJoinDate && now < event.startJoinDate) {
-      return c.json({ message: "Not in submission period" }, 400);
-    }
-    if (event.endJoinDate && now > event.endJoinDate) {
-      return c.json({ message: "Submission period has ended" }, 400);
+    const updateError = getProjectDataUpdateError(event);
+    if (updateError) {
+      return c.json({ message: updateError }, 400);
     }
 
     if (event.maxTeamMembers !== null && event.maxTeamMembers !== undefined) {
@@ -758,6 +776,17 @@ teamsRoute.post("/:id/teams/:teamId/files", async (c) => {
   });
   if (!fileType) return c.json({ message: "Invalid file type" }, 400);
 
+  const event = await prisma.event.findFirst({
+    where: { id: eventId, deletedAt: null },
+    select: { startJoinDate: true, endJoinDate: true, allowProjectDataUpdate: true },
+  });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+
+  const updateError = getProjectDataUpdateError(event);
+  if (updateError) {
+    return c.json({ message: updateError }, 400);
+  }
+
   // Check if file already exists for this team and fileType
   const existingFile = await prisma.teamFile.findFirst({
     where: { teamId, fileTypeId, deletedAt: null },
@@ -787,6 +816,9 @@ teamsRoute.post("/:id/teams/:teamId/files", async (c) => {
     await minio.putObject(bucket, objectName, buffer);
     fileUrl = `/backend/files/${bucket}/${objectName}`;
   } else if (url) {
+    if (!isSafePublicHttpUrl(url)) {
+      return c.json({ message: "Invalid URL. Only public http/https links are allowed." }, 400);
+    }
     fileUrl = url;
   }
 
@@ -824,6 +856,17 @@ teamsRoute.delete("/:id/teams/:teamId/files/:fileTypeId", async (c) => {
 
   if (!user) return c.json({ message: "Unauthorized" }, 401);
 
+  const event = await prisma.event.findFirst({
+    where: { id: eventId, deletedAt: null },
+    select: { startJoinDate: true, endJoinDate: true, allowProjectDataUpdate: true },
+  });
+  if (!event) return c.json({ message: "Event not found" }, 404);
+
+  const updateError = getProjectDataUpdateError(event);
+  if (updateError) {
+    return c.json({ message: updateError }, 400);
+  }
+
   // Allow any team member to delete, matching upload permissions
   await prisma.teamFile.updateMany({
     where: { teamId, fileTypeId },
@@ -860,13 +903,9 @@ teamsRoute.delete("/:id/teams/:teamId/members/:userId", async (c) => {
   const event = await prisma.event.findFirst({ where: { id: eventId, deletedAt: null } });
   if (!event) return c.json({ message: "Event not found" }, 404);
 
-  // Check submission period
-  const now = new Date();
-  if (event.startJoinDate && now < event.startJoinDate) {
-    return c.json({ message: "Not in submission period" }, 400);
-  }
-  if (event.endJoinDate && now > event.endJoinDate) {
-    return c.json({ message: "Submission period has ended" }, 400);
+  const updateError = getProjectDataUpdateError(event);
+  if (updateError) {
+    return c.json({ message: updateError }, 400);
   }
 
   if (!requester.isLeader && user?.id !== targetUserId) {

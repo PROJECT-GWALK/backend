@@ -106,6 +106,8 @@ model Event {
   hasCommittee           Boolean     @default(false)
   gradingEnabled         Boolean     @default(true)
   gradingDaysAfterEnd    Int         @default(2)
+  gradingEndAt           DateTime?   @db.Timestamptz(3)
+  allowProjectDataUpdate Boolean     @default(false)
   publicJoin             Boolean     @default(true)
   passwordJoin           String?
   startJoinDate          DateTime?   @db.Timestamptz(3)

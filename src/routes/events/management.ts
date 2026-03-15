@@ -108,6 +108,13 @@ managementRoute.put("/:id", async (c) => {
       const n = parseInt(form["gradingDaysAfterEnd"] as string);
       if (!Number.isNaN(n)) data.gradingDaysAfterEnd = Math.max(0, Math.floor(n));
     }
+    if (typeof form["gradingEndAt"] === "string") {
+      const raw = (form["gradingEndAt"] as string).trim();
+      data.gradingEndAt = raw.length > 0 ? new Date(raw) : null;
+    }
+    if (typeof form["allowProjectDataUpdate"] === "string") {
+      data.allowProjectDataUpdate = (form["allowProjectDataUpdate"] as string) === "true";
+    }
     if (typeof form["currentStep"] === "string") {
       const cs = parseInt(form["currentStep"] as string);
       if (!Number.isNaN(cs)) data.currentStep = cs;
@@ -220,6 +227,16 @@ managementRoute.put("/:id", async (c) => {
         typeof body.gradingDaysAfterEnd === "number"
           ? Math.max(0, Math.floor(body.gradingDaysAfterEnd))
           : event.gradingDaysAfterEnd,
+      gradingEndAt:
+        "gradingEndAt" in body
+          ? body.gradingEndAt
+            ? new Date(body.gradingEndAt)
+            : null
+          : event.gradingEndAt,
+      allowProjectDataUpdate:
+        typeof body.allowProjectDataUpdate === "boolean"
+          ? body.allowProjectDataUpdate
+          : event.allowProjectDataUpdate,
       unitReward: typeof body.unitReward === "string" ? body.unitReward : event.unitReward,
     } as any;
     if ("imageCover" in body)
@@ -308,6 +325,13 @@ managementRoute.put("/:id", async (c) => {
     return c.json({ message: "Submission start must be before event start" }, 400);
   if (ej && sv && ej >= sv)
     return c.json({ message: "Submission end must be before event start" }, 400);
+  const ge = ("gradingEndAt" in data ? (data as any).gradingEndAt : event.gradingEndAt) as
+    | Date
+    | null;
+  if (ge && sv && ge < sv)
+    return c.json({ message: "Grading end must be after event start" }, 400);
+  if (ge && ev && ge < ev)
+    return c.json({ message: "Grading end must be after event end" }, 400);
 
   const updated = await prisma.event.update({ where: { id }, data });
 

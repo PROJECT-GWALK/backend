@@ -70,6 +70,7 @@ statsRoute.get("/:id/presenter/stats", async (c) => {
   // 4. Special Rewards Votes
   const allSpecialRewards = await prisma.specialReward.findMany({
     where: { eventId, deletedAt: null },
+    orderBy: { createdAt: "asc" },
   });
 
   const specialVotes = await prisma.specialRewardVote.findMany({
@@ -111,6 +112,7 @@ statsRoute.get("/:id/rankings", async (c) => {
     include: {
       specialRewards: {
         where: { deletedAt: null },
+        orderBy: { createdAt: "asc" },
         include: {
           votes: { where: { deletedAt: null } },
         },

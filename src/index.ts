@@ -3,8 +3,9 @@ import { Hono } from "hono";
 import userManagement from "./routes/usermanagement.js";
 import adminDashboard from "./routes/admindashboard.js";
 import filesRoute from "./routes/files.js";
-import eventsRoute from "./routes/events.js";
+import eventsRoute from "./routes/events/index.js";
 import evaluationRoute from "./routes/evaluation.js";
+import systemLogs from "./routes/systemlogs.js";
 import { swaggerUI } from "@hono/swagger-ui";
 import { openApiDoc } from "./swingger/ApiDoc.js";
 import { userRoute, userProfileRoute } from "./routes/userinfo.js";
@@ -54,6 +55,7 @@ app.route("/api/evaluation", evaluationRoute);
 //////////////////////////////////////////////////////////
 app.route("/api/usermanagement", userManagement);
 app.route("/api/admindashboard", adminDashboard);
+app.route("/api/systemlogs", systemLogs);
 
 serve(
   {

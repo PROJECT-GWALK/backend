@@ -4,6 +4,7 @@ import { authMiddleware } from "../middlewares/auth.js";
 import type { User } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { z } from "zod";
+import { createLog } from "../lib/logger.js";
 
 // Validation Schemas
 const createEvaluationCriteriaSchema = z.object({
@@ -52,6 +53,7 @@ evaluationRoute.get("/event/:eventId/criteria", async (c) => {
         eventId,
         userId: user.id,
         eventGroup: { in: ["ORGANIZER", "COMMITTEE"] },
+        deletedAt: null,
       },
     });
 
@@ -60,7 +62,7 @@ evaluationRoute.get("/event/:eventId/criteria", async (c) => {
     }
 
     const criteria = await prisma.evaluationCriteria.findMany({
-      where: { eventId },
+      where: { eventId, deletedAt: null },
       orderBy: { sortOrder: "asc" },
     });
 
@@ -90,7 +92,7 @@ evaluationRoute.post(
       }
 
       // Check if user is organizer
-      const event = await prisma.event.findUnique({ where: { id: eventId } });
+      const event = await prisma.event.findFirst({ where: { id: eventId, deletedAt: null } });
       if (!event) {
         return c.json({ message: "Event not found" }, 404);
       }
@@ -100,6 +102,7 @@ evaluationRoute.post(
           eventId,
           userId: user.id,
           eventGroup: "ORGANIZER",
+          deletedAt: null,
         },
       });
 
@@ -117,6 +120,14 @@ evaluationRoute.post(
           sortOrder: input.sortOrder,
         },
       });
+
+      // await createLog(
+      //   user.id,
+      //   "CREATE_EVALUATION_CRITERIA",
+      //   `Created criteria ${criteria.id} (${criteria.name}) for event ${eventId}`,
+      //   c.req.header("x-forwarded-for"),
+      //   c.req.header("user-agent")
+      // );
 
       return c.json({ criteria }, 201);
     } catch (error) {
@@ -151,6 +162,7 @@ evaluationRoute.put(
           eventId,
           userId: user.id,
           eventGroup: "ORGANIZER",
+          deletedAt: null,
         },
       });
 
@@ -162,6 +174,14 @@ evaluationRoute.put(
         where: { id: criteriaId },
         data: input,
       });
+
+      // await createLog(
+      //   user.id,
+      //   "UPDATE_EVALUATION_CRITERIA",
+      //   `Updated criteria ${criteriaId} for event ${eventId}`,
+      //   c.req.header("x-forwarded-for"),
+      //   c.req.header("user-agent")
+      // );
 
       return c.json({ criteria });
     } catch (error: any) {
@@ -195,6 +215,7 @@ evaluationRoute.delete("/event/:eventId/criteria/:criteriaId", async (c) => {
         eventId,
         userId: user.id,
         eventGroup: "ORGANIZER",
+        deletedAt: null,
       },
     });
 
@@ -202,9 +223,18 @@ evaluationRoute.delete("/event/:eventId/criteria/:criteriaId", async (c) => {
       return c.json({ message: "Only organizers can delete criteria" }, 403);
     }
 
-    await prisma.evaluationCriteria.delete({
+    await prisma.evaluationCriteria.update({
       where: { id: criteriaId },
+      data: { deletedAt: new Date() },
     });
+
+    // await createLog(
+    //   user.id,
+    //   "DELETE_EVALUATION_CRITERIA",
+    //   `Deleted criteria ${criteriaId} from event ${eventId}`,
+    //   c.req.header("x-forwarded-for"),
+    //   c.req.header("user-agent")
+    // );
 
     return c.json({ message: "Criteria deleted successfully" });
   } catch (error: any) {
@@ -262,9 +292,9 @@ evaluationRoute.post(
         );
       }
 
-      const event = await prisma.event.findUnique({
-        where: { id: eventId },
-        select: { startView: true, endView: true, gradingDaysAfterEnd: true },
+      const event = await prisma.event.findFirst({
+        where: { id: eventId, deletedAt: null },
+        select: { startView: true, endView: true, gradingDaysAfterEnd: true, gradingEndAt: true },
       });
 
       if (!event) {
@@ -274,22 +304,23 @@ evaluationRoute.post(
       const now = new Date();
       const startTime = event.startView ? new Date(event.startView) : null;
       const gradingDaysAfterEnd = event.gradingDaysAfterEnd ?? 2;
-      const gradingDeadline = event.endView
-        ? new Date(
-            new Date(event.endView).getTime() + gradingDaysAfterEnd * 24 * 60 * 60 * 1000,
-          )
-        : null;
+      const gradingDeadline = event.gradingEndAt
+        ? new Date(event.gradingEndAt)
+        : event.endView
+          ? new Date(
+              new Date(event.endView).getTime() + gradingDaysAfterEnd * 24 * 60 * 60 * 1000,
+            )
+          : null;
       const gradingWindowOpen = startTime ? now >= startTime : true;
       const gradingWindowClosed = gradingDeadline ? now > gradingDeadline : false;
 
       if (!gradingWindowOpen || gradingWindowClosed) {
-        const daysLabel =
-          gradingDaysAfterEnd === 1 ? "1 day" : `${gradingDaysAfterEnd} days`;
+        const deadlineLabel = gradingDeadline ? gradingDeadline.toISOString() : null;
         return c.json(
           {
             message:
-              gradingDaysAfterEnd > 0
-                ? `Grading is available during the event and up to ${daysLabel} after it ends.`
+              deadlineLabel
+                ? `Grading is available from event start until ${deadlineLabel}.`
                 : "Grading is available during the event only.",
           },
           403,
@@ -298,7 +329,7 @@ evaluationRoute.post(
 
       // Verify team exists in event
       const team = await prisma.team.findFirst({
-        where: { id: teamId, eventId },
+        where: { id: teamId, eventId, deletedAt: null },
       });
 
       if (!team) {
@@ -307,7 +338,7 @@ evaluationRoute.post(
 
       // Verify criteria exists and get maxScore
       const criteria = await prisma.evaluationCriteria.findFirst({
-        where: { id: criteriaId, eventId },
+        where: { id: criteriaId, eventId, deletedAt: null },
       });
 
       if (!criteria) {
@@ -333,7 +364,7 @@ evaluationRoute.post(
             committeeId: user.id,
           },
         },
-        update: { score },
+        update: { score, deletedAt: null },
         create: {
           eventId,
           teamId,
@@ -342,6 +373,14 @@ evaluationRoute.post(
           score,
         },
       });
+
+      // await createLog(
+      //   user.id,
+      //   "SUBMIT_GRADE",
+      //   `Submitted grade ${score} for team ${teamId} on criteria ${criteriaId}`,
+      //   c.req.header("x-forwarded-for"),
+      //   c.req.header("user-agent")
+      // );
 
       return c.json({ result }, 200);
     } catch (error) {
@@ -426,16 +465,17 @@ evaluationRoute.get("/event/:eventId/results", async (c) => {
 
     // Get all teams with their evaluation results
     const teams = await prisma.team.findMany({
-      where: { eventId },
+      where: { eventId, deletedAt: null },
       include: {
         participants: {
-          where: { eventGroup: "PRESENTER" },
-          include: { user: { select: { name: true, image: true } } },
+          where: { eventGroup: "PRESENTER", deletedAt: null },
+          include: { user: { select: { name: true, image: true, deletedAt: true } } },
         },
         evaluationResults: {
+          where: { deletedAt: null },
           include: {
             criteria: true,
-            committee: { select: { name: true } },
+            committee: { select: { name: true, deletedAt: true } },
           },
         },
       },
@@ -443,12 +483,13 @@ evaluationRoute.get("/event/:eventId/results", async (c) => {
 
     // Get criteria to calculate weighted scores
     const criteria = await prisma.evaluationCriteria.findMany({
-      where: { eventId },
+      where: { eventId, deletedAt: null },
     });
 
     // Calculate average scores
     const results = teams.map((team) => {
       const presenterNames = team.participants
+        .filter((participant) => !participant.user?.deletedAt)
         .map((participant) => participant.user?.name)
         .filter((name): name is string => Boolean(name));
       const presenterName = presenterNames.length > 0 ? presenterNames.join(", ") : "Unknown";
@@ -457,6 +498,9 @@ evaluationRoute.get("/event/:eventId/results", async (c) => {
       const byCommittee = new Map<string, { name: string; scores: Map<string, number> }>();
 
       team.evaluationResults.forEach((result) => {
+        // Skip if committee member is soft-deleted or criteria is soft-deleted
+        if (result.committee?.deletedAt || result.criteria?.deletedAt) return;
+
         if (!byCommittee.has(result.committeeId)) {
           byCommittee.set(result.committeeId, {
             name: result.committee.name || "Unknown",
@@ -536,6 +580,7 @@ evaluationRoute.get("/event/:eventId/team/:teamId/status", async (c) => {
         eventId,
         userId: user.id,
         eventGroup: "COMMITTEE",
+        deletedAt: null,
       },
     });
 
@@ -545,7 +590,7 @@ evaluationRoute.get("/event/:eventId/team/:teamId/status", async (c) => {
 
     // Get criteria count for this event
     const criteriaCount = await prisma.evaluationCriteria.count({
-      where: { eventId },
+      where: { eventId, deletedAt: null },
     });
 
     // Get current user's grades
@@ -554,6 +599,7 @@ evaluationRoute.get("/event/:eventId/team/:teamId/status", async (c) => {
         eventId,
         teamId,
         committeeId: user.id,
+        deletedAt: null, 
       },
     });
 

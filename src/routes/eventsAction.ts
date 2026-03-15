@@ -3,6 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { authMiddleware } from "../middlewares/auth.js";
 import type { User } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import { createLog } from "../lib/logger.js";
 import {
   giveVrSchema,
   resetVrSchema,
@@ -38,6 +39,7 @@ eventsActionRoute.put(
         eventId: eventId,
         userId: user.id,
         eventGroup: { in: ["GUEST", "COMMITTEE"] },
+        deletedAt: null,
       },
       include: { event: true },
     });
@@ -70,6 +72,7 @@ eventsActionRoute.put(
       where: {
         id: projectId,
         eventId: eventId,
+        deletedAt: null,
       },
     });
 
@@ -102,6 +105,7 @@ eventsActionRoute.put(
             eventId: eventId,
             giverId: user.id,
             teamId: { not: projectId },
+            deletedAt: null,
           },
           _sum: {
             reward: true,
@@ -112,6 +116,7 @@ eventsActionRoute.put(
             eventId: eventId,
             giverId: user.id,
             teamId: { not: projectId },
+            deletedAt: null,
           },
           _sum: { amount: true },
         });
@@ -122,7 +127,7 @@ eventsActionRoute.put(
         const thisTeamCategoryRewards =
           (
             await tx.teamRewardCategory.aggregate({
-              where: { eventId: eventId, teamId: projectId, giverId: user.id },
+              where: { eventId: eventId, teamId: projectId, giverId: user.id, deletedAt: null },
               _sum: { amount: true },
             })
           )._sum.amount || 0;
@@ -134,18 +139,20 @@ eventsActionRoute.put(
           throw new Error("Insufficient VR balance");
         }
 
-        await tx.teamRewardCategory.deleteMany({
+        await tx.teamRewardCategory.updateMany({
           where: { eventId: eventId, teamId: projectId, giverId: user.id },
+          data: { deletedAt: new Date() },
         });
 
         const existingReward = await tx.teamReward.findFirst({
-          where: { eventId: eventId, teamId: projectId, giverId: user.id },
+          where: { eventId: eventId, teamId: projectId, giverId: user.id, deletedAt: null },
         });
 
         if (existingReward) {
           if (totalAmount === 0) {
-            await tx.teamReward.delete({
+            await tx.teamReward.update({
               where: { id: existingReward.id },
+              data: { deletedAt: new Date() },
             });
           } else {
             await tx.teamReward.update({
@@ -165,11 +172,11 @@ eventsActionRoute.put(
         }
 
         const usedRewards = await tx.teamReward.aggregate({
-          where: { eventId: eventId, giverId: user.id },
+          where: { eventId: eventId, giverId: user.id, deletedAt: null },
           _sum: { reward: true },
         });
         const usedCategoryRewards = await tx.teamRewardCategory.aggregate({
-          where: { eventId: eventId, giverId: user.id },
+          where: { eventId: eventId, giverId: user.id, deletedAt: null },
           _sum: { amount: true },
         });
 
@@ -181,13 +188,28 @@ eventsActionRoute.put(
         };
       });
 
+      // Disable logging for GIVE_VR to reduce noise
+      // await createLog(
+      //   user.id,
+      //   "GIVE_VR",
+      //   `Gave ${amount} VR to team ${projectId}`,
+      //   c.req.header("x-forwarded-for"),
+      //   c.req.header("user-agent")
+      // );
+
       return c.json({
         message: "VR updated successfully",
         totalLimit: result.totalLimit,
         totalUsed: result.totalUsed,
       });
     } catch (error: any) {
-      console.error("Error updating VR:", error);
+      await createLog(
+        user.id,
+        "ERROR_GIVE_VR",
+        `Error updating VR: ${error.message}`,
+        c.req.header("x-forwarded-for"),
+        c.req.header("user-agent")
+      );
       const status = [
         "Insufficient VR balance",
         "Exceeds VR per-team limit",
@@ -221,6 +243,7 @@ eventsActionRoute.post(
         eventId: eventId,
         userId: user.id,
         eventGroup: { in: ["GUEST", "COMMITTEE"] },
+        deletedAt: null,
       },
       include: { event: true },
     });
@@ -244,11 +267,11 @@ eventsActionRoute.post(
     }
 
     const rewards = await prisma.teamReward.aggregate({
-      where: { eventId, teamId: projectId, giverId: user.id },
+      where: { eventId, teamId: projectId, giverId: user.id, deletedAt: null },
       _sum: { reward: true },
     });
     const categoryRewards = await prisma.teamRewardCategory.aggregate({
-      where: { eventId, teamId: projectId, giverId: user.id },
+      where: { eventId, teamId: projectId, giverId: user.id, deletedAt: null },
       _sum: { amount: true },
     });
 
@@ -264,29 +287,31 @@ eventsActionRoute.post(
 
     try {
       const result = await prisma.$transaction(async (tx) => {
-        await tx.teamRewardCategory.deleteMany({
+        await tx.teamRewardCategory.updateMany({
           where: {
             eventId,
             teamId: projectId,
             giverId: user.id,
           },
+          data: { deletedAt: new Date() },
         });
 
         // Delete rewards for this team
-        await tx.teamReward.deleteMany({
+        await tx.teamReward.updateMany({
           where: {
             eventId,
             teamId: projectId,
             giverId: user.id,
           },
+          data: { deletedAt: new Date() },
         });
 
         const remainingRewards = await tx.teamReward.aggregate({
-          where: { eventId, giverId: user.id },
+          where: { eventId, giverId: user.id, deletedAt: null },
           _sum: { reward: true },
         });
         const remainingCategoryRewards = await tx.teamRewardCategory.aggregate({
-          where: { eventId, giverId: user.id },
+          where: { eventId, giverId: user.id, deletedAt: null },
           _sum: { amount: true },
         });
 
@@ -296,6 +321,14 @@ eventsActionRoute.post(
 
         return { totalLimit: participant.virtualReward, totalUsed };
       });
+
+      // await createLog(
+      //   user.id,
+      //   "RESET_VR",
+      //   `Reset VR for team ${projectId}`,
+      //   c.req.header("x-forwarded-for"),
+      //   c.req.header("user-agent")
+      // );
 
       return c.json({
         message: "VR refunded successfully",
@@ -327,6 +360,7 @@ eventsActionRoute.put(
         eventId: eventId,
         userId: user.id,
         eventGroup: { in: ["COMMITTEE", "GUEST"] },
+        deletedAt: null,
       },
       include: { event: true },
     });
@@ -353,7 +387,7 @@ eventsActionRoute.put(
     }
 
     const team = await prisma.team.findFirst({
-      where: { id: projectId, eventId: eventId },
+      where: { id: projectId, eventId: eventId, deletedAt: null },
     });
     if (!team) return c.json({ message: "Team not found" }, 404);
 
@@ -362,6 +396,7 @@ eventsActionRoute.put(
       where: {
         id: { in: rewardIds },
         eventId: eventId,
+        deletedAt: null,
       },
     });
 
@@ -382,6 +417,7 @@ eventsActionRoute.put(
           where: {
             committeeId: participant.id,
             teamId: projectId,
+            deletedAt: null,
           },
         });
 
@@ -404,6 +440,7 @@ eventsActionRoute.put(
               committeeId: participant.id,
               rewardId: { in: toAdd },
               teamId: { not: projectId },
+              deletedAt: null,
             },
             include: { reward: true },
           });
@@ -420,26 +457,51 @@ eventsActionRoute.put(
 
         // 5. Remove
         if (toRemove.length > 0) {
-          await tx.specialRewardVote.deleteMany({
+          await tx.specialRewardVote.updateMany({
             where: {
               committeeId: participant.id,
               teamId: projectId,
               rewardId: { in: toRemove },
             },
+            data: { deletedAt: new Date() },
           });
         }
 
         // 6. Add
         for (const rid of toAdd) {
-          await tx.specialRewardVote.create({
-            data: {
+          // Check if it was previously soft deleted
+          const existing = await tx.specialRewardVote.findFirst({
+            where: {
               committeeId: participant.id,
               teamId: projectId,
               rewardId: rid,
             },
           });
+
+          if (existing) {
+             await tx.specialRewardVote.update({
+               where: { id: existing.id },
+               data: { deletedAt: null },
+             });
+          } else {
+             await tx.specialRewardVote.create({
+               data: {
+                 committeeId: participant.id,
+                 teamId: projectId,
+                 rewardId: rid,
+               },
+             });
+          }
         }
       });
+
+      // await createLog(
+      //   user.id,
+      //   "GIVE_SPECIAL_REWARD",
+      //   `Gave special rewards to team ${projectId}`,
+      //   c.req.header("x-forwarded-for"),
+      //   c.req.header("user-agent")
+      // );
 
       return c.json({ message: "Special rewards updated successfully" });
     } catch (error: any) {
@@ -467,6 +529,7 @@ eventsActionRoute.post(
         eventId: eventId,
         userId: user.id,
         eventGroup: { in: ["COMMITTEE", "GUEST"] },
+        deletedAt: null,
       },
       include: { event: true },
     });
@@ -493,12 +556,21 @@ eventsActionRoute.post(
     }
 
     try {
-      await prisma.specialRewardVote.deleteMany({
+      await prisma.specialRewardVote.updateMany({
         where: {
           committeeId: participant.id,
           teamId: projectId,
         },
+        data: { deletedAt: new Date() },
       });
+
+      // await createLog(
+      //   user.id,
+      //   "RESET_SPECIAL_REWARD",
+      //   `Reset special rewards for team ${projectId}`,
+      //   c.req.header("x-forwarded-for"),
+      //   c.req.header("user-agent")
+      // );
 
       return c.json({ message: "Special reward reset successfully" });
     } catch (error) {
@@ -526,6 +598,7 @@ eventsActionRoute.post(
         eventId: eventId,
         userId: user.id,
         eventGroup: { in: ["GUEST", "COMMITTEE"] },
+        deletedAt: null,
       },
       include: { event: true },
     });
@@ -554,7 +627,7 @@ eventsActionRoute.post(
     }
 
     const team = await prisma.team.findFirst({
-      where: { id: projectId, eventId: eventId },
+      where: { id: projectId, eventId: eventId, deletedAt: null },
     });
     if (!team) return c.json({ message: "Team not found" }, 404);
 
@@ -565,6 +638,9 @@ eventsActionRoute.post(
           eventId,
           teamId: projectId,
           userId: user.id,
+          // deletedAt: null, // Comment logic: update if exists (even if deleted? No, if deleted, maybe create new or revive). 
+          // Let's assume we want to update the visible one.
+          deletedAt: null,
         },
       });
 
@@ -583,6 +659,14 @@ eventsActionRoute.post(
           },
         });
       }
+
+      // await createLog(
+      //   user.id,
+      //   "GIVE_COMMENT",
+      //   `Commented on team ${projectId}`,
+      //   c.req.header("x-forwarded-for"),
+      //   c.req.header("user-agent")
+      // );
 
       return c.json({ message: "Comment posted successfully" });
     } catch (error) {
@@ -610,6 +694,7 @@ eventsActionRoute.put(
       where: {
         eventId: eventId,
         userId: user.id,
+        deletedAt: null,
       },
       include: { event: true },
     });
@@ -633,12 +718,11 @@ eventsActionRoute.put(
     }
 
     try {
-      const existing = await prisma.eventRating.findUnique({
+      const existing = await prisma.eventRating.findFirst({
         where: {
-          eventId_userId: {
-            userId: user.id,
-            eventId: eventId,
-          },
+          eventId,
+          userId: user.id,
+          deletedAt: null,
         },
       });
 
@@ -658,6 +742,14 @@ eventsActionRoute.put(
         });
       }
 
+      // await createLog(
+      //   user.id,
+      //   "RATE_EVENT",
+      //   `Rated event ${eventId} with ${rating} stars`,
+      //   c.req.header("x-forwarded-for"),
+      //   c.req.header("user-agent")
+      // );
+
       return c.json({ message: "Rating submitted successfully" });
     } catch (error) {
       console.error("Error submitting rating:", error);
@@ -676,12 +768,11 @@ eventsActionRoute.get("/rate", async (c) => {
   }
 
   try {
-    const rating = await prisma.eventRating.findUnique({
+    const rating = await prisma.eventRating.findFirst({
       where: {
-        eventId_userId: {
-          userId: user.id,
-          eventId: eventId as string,
-        },
+        eventId: eventId as string,
+        userId: user.id,
+        deletedAt: null,
       },
     });
 
@@ -711,6 +802,7 @@ eventsActionRoute.get("/ratings", async (c) => {
         eventId: eventId,
         userId: user.id,
         eventGroup: "ORGANIZER",
+        deletedAt: null,
       },
     });
 
@@ -719,7 +811,7 @@ eventsActionRoute.get("/ratings", async (c) => {
     }
 
     const ratings = await prisma.eventRating.findMany({
-      where: { eventId: eventId },
+      where: { eventId: eventId, deletedAt: null },
       include: {
         user: {
           select: {

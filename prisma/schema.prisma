@@ -48,19 +48,21 @@ model User {
   emailVerified DateTime? @db.Timestamptz(3)
   createdAt     DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt     DateTime? @db.Timestamptz(3)
 
-  accounts     Account[]
-  sessions     Session[]
-  reportsBy    UserReport[]       @relation("ReportsBy")
-  reportsTo    UserReport[]       @relation("ReportsTo")
-  bans         UserBan[]          @relation("BannedBy")
-  participants EventParticipant[]
-  rewardsGiven TeamReward[]       @relation("RewardGiver")
+  accounts             Account[]
+  sessions             Session[]
+  reportsBy            UserReport[]         @relation("ReportsBy")
+  reportsTo            UserReport[]         @relation("ReportsTo")
+  bans                 UserBan[]            @relation("BannedBy")
+  participants         EventParticipant[]
+  rewardsGiven         TeamReward[]         @relation("RewardGiver")
   categoryRewardsGiven TeamRewardCategory[] @relation("RewardCategoryGiver")
-  comments     Comment[]
-  ratings      EventRating[]
-  dailyActives UserDailyActive[]
-  evaluationResults EvaluationResult[]
+  comments             Comment[]
+  ratings              EventRating[]
+  dailyActives         UserDailyActive[]
+  evaluationResults    EvaluationResult[]
+  systemLogs           SystemLog[]
 }
 
 model Account {
@@ -104,6 +106,8 @@ model Event {
   hasCommittee           Boolean     @default(false)
   gradingEnabled         Boolean     @default(true)
   gradingDaysAfterEnd    Int         @default(2)
+  gradingEndAt           DateTime?   @db.Timestamptz(3)
+  allowProjectDataUpdate Boolean     @default(false)
   publicJoin             Boolean     @default(true)
   passwordJoin           String?
   startJoinDate          DateTime?   @db.Timestamptz(3)
@@ -123,34 +127,36 @@ model Event {
   status                 EventStatus @default(DRAFT)
   createdAt              DateTime    @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime    @updatedAt @db.Timestamptz(3)
+  deletedAt              DateTime?   @db.Timestamptz(3)
 
-  participants   EventParticipant[]
-  teams          Team[]
-  fileTypes      EventFileType[]
-  rewards        TeamReward[]
-  vrCategories   VrCategory[]
-  categoryRewards TeamRewardCategory[]
-  feedbacks      CommitteeFeedback[]
-  comments       Comment[]
-  ratings        EventRating[]
-  rankings       TeamRanking[]
-  specialRewards SpecialReward[]
-  linkInvite     LinkInvite?
+  participants       EventParticipant[]
+  teams              Team[]
+  fileTypes          EventFileType[]
+  rewards            TeamReward[]
+  vrCategories       VrCategory[]
+  categoryRewards    TeamRewardCategory[]
+  feedbacks          CommitteeFeedback[]
+  comments           Comment[]
+  ratings            EventRating[]
+  rankings           TeamRanking[]
+  specialRewards     SpecialReward[]
+  linkInvite         LinkInvite?
   evaluationCriteria EvaluationCriteria[]
-  evaluationResults EvaluationResult[]
+  evaluationResults  EvaluationResult[]
 }
 
 //////////////////////////////////////////////////////////
 // PARTICIPANTS
 //////////////////////////////////////////////////////////
 model EventParticipant {
-  id            String     @id @default(uuid()) @db.Uuid
-  eventId       String     @db.Uuid
-  userId        String     @db.Uuid
+  id            String      @id @default(uuid()) @db.Uuid
+  eventId       String      @db.Uuid
+  userId        String      @db.Uuid
   eventGroup    EventGroup?
-  teamId        String?    @db.Uuid
-  virtualReward Int        @default(0)
-  isLeader      Boolean    @default(false)
+  teamId        String?     @db.Uuid
+  virtualReward Int         @default(0)
+  isLeader      Boolean     @default(false)
+  deletedAt     DateTime?   @db.Timestamptz(3)
 
   event     Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
   user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -163,47 +169,50 @@ model EventParticipant {
 // TEAM & PRESENTER
 //////////////////////////////////////////////////////////
 model Team {
-  id          String   @id @default(uuid()) @db.Uuid
-  eventId     String   @db.Uuid
+  id          String    @id @default(uuid()) @db.Uuid
+  eventId     String    @db.Uuid
   teamName    String
   description String?
   videoLink   String?
   imageCover  String?
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt   DateTime? @db.Timestamptz(3)
 
-  event        Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  participants EventParticipant[]
-  files        TeamFile[]
-  rewards      TeamReward[]
-  categoryRewards TeamRewardCategory[]
-  feedbacks    CommitteeFeedback[]
-  comments     Comment[]
-  rankings     TeamRanking[]
-  votes        SpecialRewardVote[]
+  event             Event                @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  participants      EventParticipant[]
+  files             TeamFile[]
+  rewards           TeamReward[]
+  categoryRewards   TeamRewardCategory[]
+  feedbacks         CommitteeFeedback[]
+  comments          Comment[]
+  rankings          TeamRanking[]
+  votes             SpecialRewardVote[]
   evaluationResults EvaluationResult[]
 }
 
 model VrCategory {
-  id        String   @id @default(uuid()) @db.Uuid
-  eventId   String   @db.Uuid
+  id        String    @id @default(uuid()) @db.Uuid
+  eventId   String    @db.Uuid
   nameEn    String
   nameTh    String
-  sortOrder Int      @default(0)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  sortOrder Int       @default(0)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
 
-  event   Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event   Event                @relation(fields: [eventId], references: [id], onDelete: Cascade)
   rewards TeamRewardCategory[]
 }
 
 model TeamRewardCategory {
-  id         String   @id @default(uuid()) @db.Uuid
-  eventId    String   @db.Uuid
-  teamId     String   @db.Uuid
-  giverId    String   @db.Uuid
-  categoryId String   @db.Uuid
+  id         String    @id @default(uuid()) @db.Uuid
+  eventId    String    @db.Uuid
+  teamId     String    @db.Uuid
+  giverId    String    @db.Uuid
+  categoryId String    @db.Uuid
   amount     Int
-  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
 
   event    Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
   team     Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
@@ -217,24 +226,26 @@ model TeamRewardCategory {
 // FILE MANAGEMENT
 //////////////////////////////////////////////////////////
 model EventFileType {
-  id              String   @id @default(uuid()) @db.Uuid
-  eventId         String   @db.Uuid
-  name            String
-  description     String?
+  id               String     @id @default(uuid()) @db.Uuid
+  eventId          String     @db.Uuid
+  name             String
+  description      String?
   allowedFileTypes FileType[]
-  isRequired      Boolean  @default(false)
-  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  isRequired       Boolean    @default(false)
+  createdAt        DateTime   @default(now()) @db.Timestamptz(3)
+  deletedAt        DateTime?  @db.Timestamptz(3)
 
   event     Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
   teamFiles TeamFile[]
 }
 
 model TeamFile {
-  id         String   @id @default(uuid()) @db.Uuid
-  teamId     String   @db.Uuid
-  fileTypeId String   @db.Uuid
+  id         String    @id @default(uuid()) @db.Uuid
+  teamId     String    @db.Uuid
+  fileTypeId String    @db.Uuid
   fileUrl    String
-  uploadedAt DateTime @default(now()) @db.Timestamptz(3)
+  uploadedAt DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
 
   team     Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
   fileType EventFileType @relation(fields: [fileTypeId], references: [id], onDelete: Cascade)
@@ -244,12 +255,13 @@ model TeamFile {
 // REWARD & FEEDBACK & COMMENT
 //////////////////////////////////////////////////////////
 model TeamReward {
-  id        String   @id @default(uuid()) @db.Uuid
-  eventId   String   @db.Uuid
-  teamId    String   @db.Uuid
-  giverId   String   @db.Uuid
+  id        String    @id @default(uuid()) @db.Uuid
+  eventId   String    @db.Uuid
+  teamId    String    @db.Uuid
+  giverId   String    @db.Uuid
   reward    Int
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
   team  Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
@@ -257,12 +269,13 @@ model TeamReward {
 }
 
 model CommitteeFeedback {
-  id          String   @id @default(uuid()) @db.Uuid
-  eventId     String   @db.Uuid
-  teamId      String   @db.Uuid
-  committeeId String   @db.Uuid
+  id          String    @id @default(uuid()) @db.Uuid
+  eventId     String    @db.Uuid
+  teamId      String    @db.Uuid
+  committeeId String    @db.Uuid
   content     String
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt   DateTime? @db.Timestamptz(3)
 
   event     Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
   team      Team             @relation(fields: [teamId], references: [id], onDelete: Cascade)
@@ -270,12 +283,13 @@ model CommitteeFeedback {
 }
 
 model Comment {
-  id        String   @id @default(uuid()) @db.Uuid
-  eventId   String   @db.Uuid
-  teamId    String?  @db.Uuid
-  userId    String   @db.Uuid
+  id        String    @id @default(uuid()) @db.Uuid
+  eventId   String    @db.Uuid
+  teamId    String?   @db.Uuid
+  userId    String    @db.Uuid
   content   String
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
   team  Team? @relation(fields: [teamId], references: [id], onDelete: Cascade)
@@ -286,12 +300,13 @@ model Comment {
 // EVENT RATING & RANKING
 //////////////////////////////////////////////////////////
 model EventRating {
-  id        String   @id @default(uuid()) @db.Uuid
-  eventId   String   @db.Uuid
-  userId    String   @db.Uuid
+  id        String    @id @default(uuid()) @db.Uuid
+  eventId   String    @db.Uuid
+  userId    String    @db.Uuid
   rating    Int
   comment   String?
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -312,24 +327,26 @@ model TeamRanking {
 }
 
 model SpecialReward {
-  id          String   @id @default(uuid()) @db.Uuid
-  eventId     String   @db.Uuid
-  name        String
-  description String?
-  image       String?
-  allowGuestVote Boolean @default(false)
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  id             String    @id @default(uuid()) @db.Uuid
+  eventId        String    @db.Uuid
+  name           String
+  description    String?
+  image          String?
+  allowGuestVote Boolean   @default(false)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt      DateTime? @db.Timestamptz(3)
 
   event Event               @relation(fields: [eventId], references: [id], onDelete: Cascade)
   votes SpecialRewardVote[]
 }
 
 model SpecialRewardVote {
-  id          String   @id @default(uuid()) @db.Uuid
-  rewardId    String   @db.Uuid
-  committeeId String   @db.Uuid
-  teamId      String   @db.Uuid
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  id          String    @id @default(uuid()) @db.Uuid
+  rewardId    String    @db.Uuid
+  committeeId String    @db.Uuid
+  teamId      String    @db.Uuid
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt   DateTime? @db.Timestamptz(3)
 
   reward    SpecialReward    @relation(fields: [rewardId], references: [id], onDelete: Cascade)
   committee EventParticipant @relation(fields: [committeeId], references: [id], onDelete: Cascade)
@@ -342,11 +359,12 @@ model SpecialRewardVote {
 // REPORT & BAN
 //////////////////////////////////////////////////////////
 model UserReport {
-  id         String   @id @default(uuid()) @db.Uuid
-  reporterId String   @db.Uuid
-  reportedId String   @db.Uuid
+  id         String    @id @default(uuid()) @db.Uuid
+  reporterId String    @db.Uuid
+  reportedId String    @db.Uuid
   reason     String
-  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt  DateTime? @db.Timestamptz(3)
 
   reporter User @relation("ReportsBy", fields: [reporterId], references: [id], onDelete: Cascade)
   reported User @relation("ReportsTo", fields: [reportedId], references: [id], onDelete: Cascade)
@@ -359,6 +377,7 @@ model UserBan {
   bannedBy  String    @db.Uuid
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   expiresAt DateTime? @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
 
   admin User @relation("BannedBy", fields: [bannedBy], references: [id], onDelete: Cascade)
 }
@@ -381,34 +400,36 @@ model UserDailyActive {
 // EVALUATION & GRADING
 //////////////////////////////////////////////////////////
 model EvaluationCriteria {
-  id                String   @id @default(uuid()) @db.Uuid
-  eventId           String   @db.Uuid
-  name              String
-  description       String?
-  maxScore          Float
-  weightPercentage  Float
-  sortOrder         Int      @default(0)
-  createdAt         DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
+  id               String    @id @default(uuid()) @db.Uuid
+  eventId          String    @db.Uuid
+  name             String
+  description      String?
+  maxScore         Float
+  weightPercentage Float
+  sortOrder        Int       @default(0)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt        DateTime? @db.Timestamptz(3)
 
-  event   Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event   Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
   results EvaluationResult[]
 }
 
 model EvaluationResult {
-  id                String   @id @default(uuid()) @db.Uuid
-  eventId           String   @db.Uuid
-  teamId            String   @db.Uuid
-  criteriaId        String   @db.Uuid
-  committeeId       String   @db.Uuid
-  score             Float
-  createdAt         DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime @updatedAt @db.Timestamptz(3)
+  id          String    @id @default(uuid()) @db.Uuid
+  eventId     String    @db.Uuid
+  teamId      String    @db.Uuid
+  criteriaId  String    @db.Uuid
+  committeeId String    @db.Uuid
+  score       Float
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt   DateTime? @db.Timestamptz(3)
 
-  event    Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  team     Team               @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  criteria EvaluationCriteria @relation(fields: [criteriaId], references: [id], onDelete: Cascade)
-  committee User              @relation(fields: [committeeId], references: [id], onDelete: Cascade)
+  event     Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  team      Team               @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  criteria  EvaluationCriteria @relation(fields: [criteriaId], references: [id], onDelete: Cascade)
+  committee User               @relation(fields: [committeeId], references: [id], onDelete: Cascade)
 
   @@unique([teamId, criteriaId, committeeId])
 }
@@ -417,13 +438,30 @@ model EvaluationResult {
 // Link invite
 //////////////////////////////////////////////////////////
 model LinkInvite {
-  id             String   @id @default(uuid()) @db.Uuid
-  eventId        String   @unique @db.Uuid
-  createdAt      DateTime @default(now()) @db.Timestamptz(3)
-  committeeToken String   @default(uuid())
-  presenterToken String   @default(uuid())
-  guestToken     String   @default(uuid())
+  id             String    @id @default(uuid()) @db.Uuid
+  eventId        String    @unique @db.Uuid
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  committeeToken String    @default(uuid())
+  presenterToken String    @default(uuid())
+  guestToken     String    @default(uuid())
   organizerToken String?
+  deletedAt      DateTime? @db.Timestamptz(3)
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
+
+//////////////////////////////////////////////////////////
+// SYSTEM LOGS
+//////////////////////////////////////////////////////////
+model SystemLog {
+  id        String    @id @default(uuid()) @db.Uuid
+  action    String
+  details   String?
+  userId    String?   @db.Uuid
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 }

@@ -15,7 +15,7 @@ export async function authMiddleware(c: Context<{ Variables: { user: User } }>, 
     include: { user: true },
   });
 
-  if (!session || session.expires < new Date()) {
+  if (!session || session.expires < new Date() || session.user.deletedAt) {
     return c.json({ message: "Unauthorized" }, 401);
   }
 
@@ -38,7 +38,7 @@ export async function optionalAuthMiddleware(c: Context<{ Variables: { user: Use
     include: { user: true },
   });
 
-  if (!session || session.expires < new Date()) {
+  if (!session || session.expires < new Date() || session.user.deletedAt) {
     c.set("user", null);
     return next();
   }

@@ -172,9 +172,6 @@ coreRoute.get("/me/history", async (c) => {
       event: true,
       team: {
         where: { deletedAt: null },
-        include: {
-          rankings: true,
-        },
       },
     },
     orderBy: {
@@ -224,7 +221,7 @@ coreRoute.get("/me/history", async (c) => {
         }
       }
 
-      let rank = p.team?.rankings.find((r) => r.eventId === eventId)?.rank;
+      let rank: number | undefined;
 
       if (!rank && teamId) {
         const allTeams = await prisma.team.findMany({
@@ -339,9 +336,6 @@ coreRoute.get("/user/:username/history", async (c) => {
       event: true,
       team: {
         where: { deletedAt: null },
-        include: {
-          rankings: true,
-        },
       },
     },
     orderBy: {
@@ -391,7 +385,7 @@ coreRoute.get("/user/:username/history", async (c) => {
         }
       }
 
-      let rank = p.team?.rankings.find((r) => r.eventId === eventId)?.rank;
+      let rank: number | undefined;
 
       if (!rank && teamId) {
         const allTeams = await prisma.team.findMany({
